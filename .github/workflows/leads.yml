@@ -8,7 +8,11 @@ on:
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        category: ["GHL / CRM", "Performance Marketing", "Virtual Assistant", "Customer Service"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -17,5 +21,6 @@ jobs:
       - run: pip install python-jobspy requests
       - run: python find_leads.py
         env:
+          CATEGORY: ${{ matrix.category }}
           SHEET_WEBAPP_URL: ${{ secrets.SHEET_WEBAPP_URL }}
           SHEET_TOKEN: ${{ secrets.SHEET_TOKEN }}
