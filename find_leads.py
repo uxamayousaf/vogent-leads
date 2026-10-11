@@ -1,12 +1,15 @@
 """
 VOGENT LEAD FINDER (JobSpy version)
-Finds fresh jobs on LinkedIn in US / UK / Europe / UAE, reads the FULL
-description, keeps only real matches from small direct employers
-(no agencies, no companies over 200 staff), marks Real Estate and
-Marketing / Advertising companies as Priority, tags Remote / Hybrid /
-On-site, and sends everything to your Google Sheet.
+Searches LinkedIn, Indeed, ZipRecruiter and Google Jobs (Google also covers
+SimplyHired, beBee and company career pages) across 5 region groups.
+Reads the FULL description and keeps only:
+  - real matches for your roles
+  - English-language jobs that do not require another language
+  - direct employers (no agencies) with 200 staff or fewer (unknown size kept)
+Marks GHL jobs and Real Estate / Marketing companies as Priority,
+tags Remote / Hybrid / On-site, and sends everything to your Google Sheet.
 
-Each category + region pair runs on its own GitHub machine in parallel.
+Each category + region group runs on its own GitHub machine in parallel.
 You only ever edit the SETTINGS section.
 """
 import os
@@ -16,47 +19,109 @@ import time
 import pandas as pd
 import requests
 from jobspy import scrape_jobs
+from langdetect import DetectorFactory, detect
+
+DetectorFactory.seed = 0
 
 # ============================ SETTINGS ============================
-SITES = ["linkedin"]          # later add: "indeed", "glassdoor", "zip_recruiter"
-HOURS_OLD = 12                # only jobs posted in the last X hours (runs overlap, nothing slips)
-MAX_EMPLOYEES = 200           # companies bigger than this are skipped (unknown size is kept)
+HOURS_OLD = 26          # one run per day, 26h window so nothing slips between days
+MAX_EMPLOYEES = 200     # companies bigger than this are skipped (unknown size is kept)
 
-REGIONS = {                   # switch a region off with False
-    "US":     {"enabled": True, "location": "United States"},
-    "UK":     {"enabled": True, "location": "United Kingdom"},
-    "Europe": {"enabled": True, "location": "European Union"},
-    "UAE":    {"enabled": True, "location": "United Arab Emirates"},
+LI, IN, ZR, GO = "linkedin", "indeed", "zip_recruiter", "google"
+
+# rank = order in your sheet. scale = fewer results per search for smaller markets.
+# Each location: (search location, Indeed country or None, sites, short name shown in sheet)
+REGIONS = {
+    "USA / Canada": {"enabled": True, "rank": 1, "scale": 1.0, "locations": [
+        ("United States", "USA", [LI, IN, ZR, GO], "USA"),
+        ("Canada", "Canada", [LI, IN, ZR, GO], "Canada"),
+    ]},
+    "UK / Europe / EMEA": {"enabled": True, "rank": 2, "scale": 0.6, "locations": [
+        ("United Kingdom", "UK", [LI, IN, GO], "UK"),
+        ("European Union", None, [LI, GO], "Europe"),
+        ("Switzerland", "Switzerland", [LI, IN, GO], "Switzerland"),
+        ("South Africa", "South Africa", [LI, IN, GO], "South Africa"),
+    ]},
+    "Gulf": {"enabled": True, "rank": 3, "scale": 0.5, "locations": [
+        ("United Arab Emirates", "United Arab Emirates", [LI, IN, GO], "UAE"),
+        ("Saudi Arabia", "Saudi Arabia", [LI, IN, GO], "Saudi Arabia"),
+        ("Qatar", "Qatar", [LI, IN, GO], "Qatar"),
+        ("Kuwait", None, [LI, GO], "Kuwait"),
+        ("Bahrain", None, [LI, GO], "Bahrain"),
+        ("Oman", None, [LI, GO], "Oman"),
+    ]},
+    "Australia / NZ": {"enabled": True, "rank": 4, "scale": 0.6, "locations": [
+        ("Australia", "Australia", [LI, IN, GO], "Australia"),
+        ("New Zealand", "New Zealand", [LI, IN, GO], "New Zealand"),
+    ]},
+    "Asia (English)": {"enabled": True, "rank": 5, "scale": 0.5, "locations": [
+        ("Singapore", "Singapore", [LI, IN, GO], "Singapore"),
+        ("Malaysia", "Malaysia", [LI, IN, GO], "Malaysia"),
+        ("Hong Kong", "Hong Kong", [LI, IN, GO], "Hong Kong"),
+    ]},
 }
 
-PRIORITY_INDUSTRY_WORDS = ["real estate", "marketing", "advertising"]
-PRIORITY_NAME_WORDS = ["realty", "real estate", "properties", "homes", "realtor",
-                       "marketing", "media", "advertising", "agency", "digital"]
+GHL_TERMS = ["go high level", "highlevel", "high level crm", "ghl", "lead connector"]
+REAL_ESTATE_WORDS = ["real estate", "realty", "realtor", "properties", "homes", "property management"]
+MARKETING_WORDS = ["marketing", "advertising", "media", "agency"]
 
 CATEGORIES = {
-    "GHL / CRM": {
-        # Broad CRM / automation titles, kept ONLY if the description mentions GHL
-        "enabled": True,
-        "deep_results": 100, "normal_results": 40,
+    "CRM Automation": {   # GHL jobs are tagged and shown first
+        "enabled": True, "deep_results": 100, "normal_results": 40,
         "deep_searches": ["GoHighLevel", "Go High Level", "GHL", "HighLevel"],
         "searches": [
-            "CRM Manager", "CRM Specialist", "CRM Administrator", "CRM Coordinator",
-            "CRM Automation", "Marketing Automation Specialist", "Automation Specialist",
-            "Sales Automation", "Marketing Operations", "Funnel Builder",
-            "Email Marketing Specialist", "SMS Marketing", "Zapier",
+            "HubSpot Specialist", "HubSpot Administrator", "CRM Automation Specialist",
+            "CRM Administrator", "CRM Manager", "CRM Specialist",
+            "Marketing Automation Specialist", "Funnel Builder",
         ],
-        "must_mention": ["go high level", "highlevel", "high level crm", "ghl", "lead connector"],
+        "must_mention": GHL_TERMS + ["hubspot", "zoho crm", "keap", "activecampaign", "pipedrive"],
+    },
+    "AI Automation": {
+        "enabled": True, "deep_results": 80, "normal_results": 40,
+        "deep_searches": ["AI Automation Specialist", "n8n", "Make.com"],
+        "searches": [
+            "Automation Engineer", "Zapier Expert", "AI Agent Developer",
+            "Workflow Automation Specialist", "AI Integration Specialist",
+            "No-Code Automation", "AI Automation Engineer",
+        ],
+        "must_mention": [
+            "n8n", "make.com", "integromat", "zapier", "ai agent", "ai agents",
+            "workflow automation", "openai api", "chatgpt api", "voiceflow", "relevance ai",
+        ],
+    },
+    "RevOps": {
+        "enabled": True, "deep_results": 80, "normal_results": 40,
+        "deep_searches": ["Revenue Operations", "RevOps"],
+        "searches": [
+            "RevOps Manager", "RevOps Specialist", "Revenue Operations Analyst",
+            "Sales Operations Specialist", "Marketing Operations Specialist", "GTM Operations",
+        ],
+        "must_mention": [
+            "revenue operations", "revops", "sales operations", "sales ops",
+            "marketing operations", "gtm operations",
+        ],
+    },
+    "Bookkeeping": {
+        "enabled": True, "deep_results": 80, "normal_results": 30,
+        "deep_searches": ["Bookkeeper", "Remote Bookkeeper"],
+        "searches": [
+            "Bookkeeping Specialist", "Accounting Assistant",
+            "Accounts Payable Specialist", "Accounts Receivable Specialist",
+        ],
+        "must_mention": [
+            "bookkeeper", "bookkeeping", "quickbooks", "xero", "reconciliation",
+            "reconciliations", "accounts payable", "accounts receivable",
+        ],
     },
     "Performance Marketing": {
-        "enabled": True,
-        "deep_results": 80, "normal_results": 40,
+        "enabled": True, "deep_results": 80, "normal_results": 40,
         "deep_searches": ["Performance Marketing Specialist", "Media Buyer", "Paid Media Specialist"],
         "searches": [
             "Paid Ads Manager", "PPC Specialist", "Paid Search Specialist", "SEM Specialist",
             "Google Ads Specialist", "Meta Ads Specialist", "Facebook Ads Specialist",
             "Paid Social Specialist", "TikTok Ads", "Amazon PPC Specialist",
             "Growth Marketing Manager", "Digital Advertising Specialist",
-            "Digital Marketing Specialist", "Marketing Agency", "Agency Account Coordinator",
+            "Digital Marketing Specialist", "Agency Account Coordinator",
         ],
         "must_mention": [
             "meta ads", "facebook ads", "instagram ads", "google ads", "adwords", "ppc",
@@ -66,9 +131,7 @@ CATEGORIES = {
         ],
     },
     "Virtual Assistant": {
-        # VA / EA / admin support family, including real estate support roles
-        "enabled": True,
-        "deep_results": 100, "normal_results": 30,
+        "enabled": True, "deep_results": 100, "normal_results": 30,
         "deep_searches": ["Virtual Assistant", "Executive Assistant"],
         "searches": [
             "Remote Assistant", "Administrative Assistant", "Admin Assistant",
@@ -88,9 +151,7 @@ CATEGORIES = {
         ],
     },
     "Customer Service": {
-        # CSR / support / customer experience family
-        "enabled": True,
-        "deep_results": 80, "normal_results": 30,
+        "enabled": True, "deep_results": 80, "normal_results": 30,
         "deep_searches": ["Customer Service Representative", "Customer Support Specialist"],
         "searches": [
             "Customer Support Representative", "Customer Care Representative",
@@ -125,6 +186,19 @@ AGENCY_PHRASES = [
     "our client", "on behalf of our client", "on behalf of a client",
     "for a client of ours", "client of ours",
 ]
+
+# ---------- Language filter ----------
+OTHER_LANGUAGES = [
+    "Dutch", "Flemish", "German", "French", "Spanish", "Italian", "Portuguese", "Polish",
+    "Swedish", "Danish", "Norwegian", "Finnish", "Czech", "Hungarian", "Romanian", "Greek",
+    "Arabic", "Turkish", "Hebrew", "Russian", "Ukrainian", "Mandarin", "Cantonese",
+    "Japanese", "Korean", "Malay", "Tagalog",
+]
+REQUIRE_WORDS = ["fluent", "fluency", "native", "proficient", "proficiency", "required",
+                 "must", "mandatory", "essential", "bilingual", "speaking", "speaker"]
+PLUS_WORDS = ["plus", "preferred", "nice to have", "bonus", "advantage", "asset",
+              "desirable", "beneficial", "helpful", "ideally"]
+
 ONSITE_PHRASES = [
     "on-site", "onsite", "on site", "in office", "in-office", "in person",
     "in-person", "must be able to commute", "must reside within",
@@ -144,6 +218,10 @@ SIZE_CACHE = {}
 def build_regex(keyword):
     parts = [re.escape(p) for p in re.split(r"[\s-]+", keyword.strip()) if p]
     return re.compile(r"\b" + r"[\s-]*".join(parts) + r"\b", re.IGNORECASE)
+
+
+GHL_REGEXES = [build_regex(k) for k in GHL_TERMS]
+LANG_RE = re.compile(r"\b(" + "|".join(OTHER_LANGUAGES) + r")\b")  # case-sensitive on purpose
 
 
 def text(value):
@@ -183,6 +261,27 @@ def is_agency(company, industry, desc):
     return any(p in d for p in AGENCY_PHRASES)
 
 
+def is_english(desc):
+    if len(desc) < 80:
+        return True  # too short to judge, keep it
+    try:
+        return detect(desc[:3000]) == "en"
+    except Exception:
+        return True
+
+
+def needs_other_language(desc):
+    for sentence in re.split(r"(?<=[.!?\n])\s+", desc):
+        langs = [m for m in LANG_RE.finditer(sentence.strip())
+                 if not (m.group(1) == "Polish" and m.start() == 0)]  # "Polish your..." is a verb
+        if not langs:
+            continue
+        low = sentence.lower()
+        if any(w in low for w in REQUIRE_WORDS) and not any(w in low for w in PLUS_WORDS):
+            return True
+    return False
+
+
 def work_type(row, title, desc):
     head = (text(row.get("location")) + " " + title).lower()
     d = desc.lower()
@@ -197,28 +296,44 @@ def work_type(row, title, desc):
     return "Not stated"
 
 
-def is_priority(company, industry):
+def priority(title, desc, company, industry):
+    """Returns (label, rank). Rank 0 = GHL, 1 = other priority, 2 = none."""
+    tags = []
+    if any(r.search(title + " " + desc) for r in GHL_REGEXES):
+        tags.append("GHL")
     ind, c = industry.lower(), company.lower()
-    return any(w in ind for w in PRIORITY_INDUSTRY_WORDS) or \
-        any(w in c for w in PRIORITY_NAME_WORDS)
+    if any(w in ind or w in c for w in REAL_ESTATE_WORDS):
+        tags.append("Real Estate")
+    elif any(w in ind or w in c for w in MARKETING_WORDS):
+        tags.append("Marketing")
+    if not tags:
+        return "", 2
+    return "⭐ " + " · ".join(tags), (0 if "GHL" in tags else 1)
+
+
+def parse_size(raw):
+    nums = [int(n.replace(",", "")) for n in re.findall(r"[\d,]+", raw) if n.replace(",", "")]
+    if not nums:
+        return "Unknown", None
+    label = re.sub(r"\s*employees?", "", raw.strip(), flags=re.I)
+    return label, nums[0]
 
 
 def company_size(company_url, row):
-    """Returns (label, smallest headcount) or ("Size unknown", None)."""
+    """Returns (label, smallest headcount) or ("Unknown", None)."""
     js = text(row.get("company_num_employees"))
     if js:
         return parse_size(js)
     url = company_url.split("?")[0].rstrip("/")
     if "linkedin.com/company/" not in url:
-        return "Size unknown", None
+        return "Unknown", None
     if url in SIZE_CACHE:
         return SIZE_CACHE[url]
-    result = ("Size unknown", None)
+    result = ("Unknown", None)
     try:
         r = requests.get(url + "/", headers=UA, timeout=20, allow_redirects=True)
         if r.status_code == 200 and "authwall" not in r.url:
-            plain = re.sub(r"<[^>]+>", " ", r.text)
-            plain = re.sub(r"\s+", " ", plain)
+            plain = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", r.text))
             m = re.search(r"Company size\s*([\d,]+\s*(?:-\s*[\d,]+)?\+?)\s*employees", plain, re.I)
             if m:
                 result = parse_size(m.group(1))
@@ -229,114 +344,122 @@ def company_size(company_url, row):
     return result
 
 
-def parse_size(raw):
-    nums = [int(n.replace(",", "")) for n in re.findall(r"[\d,]+", raw) if n.replace(",", "")]
-    if not nums:
-        return "Size unknown", None
-    label = raw.strip()
-    if "employee" not in label.lower():
-        label += " employees"
-    return label, nums[0]
-
-
-def search(term, n, location):
-    try:
-        df = scrape_jobs(
-            site_name=SITES,
-            search_term=term,
-            location=location,
-            results_wanted=n,
-            hours_old=HOURS_OLD,
-            linkedin_fetch_description=True,
-        )
-        print(f"  {term}: {len(df)} jobs")
-        return df
-    except Exception as e:
-        print(f"  {term}: failed ({e})")
-        return None
-    finally:
-        time.sleep(5)
+def search(term, n, location, indeed_country, sites):
+    google_place = "Europe" if location == "European Union" else location
+    kwargs = dict(
+        search_term=term,
+        google_search_term=f"{term} jobs in {google_place} since yesterday",
+        location=location,
+        results_wanted=n,
+        hours_old=HOURS_OLD,
+        linkedin_fetch_description=True,
+    )
+    use_sites = [s for s in sites if not (s == IN and not indeed_country)]
+    for attempt in range(2):
+        try:
+            if IN in use_sites:
+                kwargs["country_indeed"] = indeed_country
+            else:
+                kwargs.pop("country_indeed", None)
+            df = scrape_jobs(site_name=use_sites, **kwargs)
+            print(f"  {term} | {location}: {len(df)} jobs")
+            return df
+        except Exception as e:
+            print(f"  {term} | {location}: failed ({e})")
+            if IN in use_sites and attempt == 0:
+                use_sites = [s for s in use_sites if s != IN]  # retry without Indeed
+                continue
+            return None
+        finally:
+            time.sleep(4)
+    return None
 
 
 def main():
     found = {}
-    checked, excluded_agency, excluded_big = set(), set(), set()
+    checked, ex_agency, ex_big, ex_lang = set(), set(), set(), set()
     ran = []
 
-    for region, rcfg in REGIONS.items():
-        if not rcfg["enabled"] or (ONLY_REGION and region != ONLY_REGION):
+    for region_name, rcfg in REGIONS.items():
+        if not rcfg["enabled"] or (ONLY_REGION and region_name != ONLY_REGION):
             continue
         for cat_name, cfg in CATEGORIES.items():
             if not cfg["enabled"] or (ONLY_CATEGORY and cat_name != ONLY_CATEGORY):
                 continue
-            ran.append(f"{cat_name} | {region}")
-            print(f"\n== {cat_name} | {region} ==")
+            ran.append(f"{cat_name} | {region_name}")
+            print(f"\n== {cat_name} | {region_name} ==")
             regexes = [build_regex(k) for k in cfg["must_mention"]]
-            terms = [(t, cfg["deep_results"]) for t in cfg["deep_searches"]] + \
-                    [(t, cfg["normal_results"]) for t in cfg["searches"]]
+            deep_n = max(10, int(cfg["deep_results"] * rcfg["scale"]))
+            normal_n = max(10, int(cfg["normal_results"] * rcfg["scale"]))
+            terms = [(t, deep_n) for t in cfg["deep_searches"]] + \
+                    [(t, normal_n) for t in cfg["searches"]]
 
-            for term, n in terms:
-                df = search(term, n, rcfg["location"])
-                if df is None or not len(df):
-                    continue
-                for _, row in df.iterrows():
-                    url = text(row.get("job_url"))
-                    if not url or url in found or url in excluded_agency or url in excluded_big:
+            for location, indeed_country, sites, short in rcfg["locations"]:
+                for term, n in terms:
+                    df = search(term, n, location, indeed_country, sites)
+                    if df is None or not len(df):
                         continue
-                    checked.add(url)
-                    title = text(row.get("title"))
-                    desc = text(row.get("description"))
-                    company = text(row.get("company"))
-                    industry = text(row.get("company_industry"))
+                    for _, row in df.iterrows():
+                        url = text(row.get("job_url"))
+                        title = text(row.get("title"))
+                        company = text(row.get("company"))
+                        # Same job on several sites counts once (company + title)
+                        key = (re.sub(r"\W+", "", company.lower()) + "|" +
+                               re.sub(r"\W+", "", title.lower())) if company else url
+                        if not url or key in found or key in ex_agency or key in ex_big or key in ex_lang:
+                            continue
+                        checked.add(key)
+                        desc = text(row.get("description"))
+                        industry = text(row.get("company_industry"))
 
-                    matched = [k for k, r in zip(cfg["must_mention"], regexes)
-                               if r.search(title + " " + desc)]
-                    if not matched:
-                        continue
-                    if is_agency(company, industry, desc):
-                        excluded_agency.add(url)
-                        continue
+                        if not any(r.search(title + " " + desc) for r in regexes):
+                            continue
+                        if not is_english(desc) or needs_other_language(desc):
+                            ex_lang.add(key)
+                            continue
+                        if is_agency(company, industry, desc):
+                            ex_agency.add(key)
+                            continue
+                        company_url = text(row.get("company_url")).split("?")[0]
+                        size_label, size_min = company_size(company_url, row)
+                        if size_min is not None and size_min > MAX_EMPLOYEES:
+                            ex_big.add(key)
+                            continue
 
-                    company_url = text(row.get("company_url"))
-                    size_label, size_min = company_size(company_url, row)
-                    if size_min is not None and size_min > MAX_EMPLOYEES:
-                        excluded_big.add(url)
-                        continue
-
-                    found[url] = {
-                        "id": text(row.get("id")) or url,
-                        "posted": text(row.get("date_posted")),
-                        "priority": "⭐ Priority" if is_priority(company, industry) else "",
-                        "category": cat_name,
-                        "region": region,
-                        "title": title,
-                        "role": short_role(title),
-                        "company": company,
-                        "industry": industry or "Not shown",
-                        "size": size_label,
-                        "location": text(row.get("location")),
-                        "work_type": work_type(row, title, desc),
-                        "matched": ", ".join(matched),
-                        "evidence": evidence(desc, regexes),
-                        "url": url,
-                        "company_url": company_url.split("?")[0],
-                    }
+                        p_label, p_rank = priority(title, desc, company, industry)
+                        found[key] = {
+                            "id": key,
+                            "posted": text(row.get("date_posted")),
+                            "priority": p_label,
+                            "priority_rank": p_rank,
+                            "category": cat_name,
+                            "region": short,
+                            "region_rank": rcfg["rank"],
+                            "title": title,
+                            "role": short_role(title),
+                            "company": company,
+                            "size": size_label,
+                            "work_type": work_type(row, title, desc),
+                            "evidence": evidence(desc, regexes),
+                            "url": url,
+                            "company_url": company_url,
+                        }
 
     if not ran:
         print("This category or region is switched off. Nothing to do.")
         return
 
     leads = sorted(found.values(), key=lambda l: (
-        0 if l["priority"] else 1, WORK_ORDER.get(l["work_type"], 9), l["posted"]))
-    print(f"\nChecked {len(checked)} | agencies excluded {len(excluded_agency)} | "
-          f"big companies excluded {len(excluded_big)} | matches {len(leads)}")
+        l["priority_rank"], l["region_rank"], WORK_ORDER.get(l["work_type"], 9), l["posted"]))
+    print(f"\nChecked {len(checked)} | agencies {len(ex_agency)} | big {len(ex_big)} | "
+          f"non-English {len(ex_lang)} | matches {len(leads)}")
 
     r = requests.post(
         WEBAPP_URL,
         json={"token": TOKEN, "category": ", ".join(ran), "leads": leads,
-              "checked": len(checked), "excluded": len(excluded_agency),
-              "excluded_big": len(excluded_big)},
-        timeout=120,
+              "checked": len(checked), "excluded": len(ex_agency),
+              "excluded_big": len(ex_big), "excluded_lang": len(ex_lang)},
+        timeout=180,
     )
     print("Sheet response:", r.text[:300])
 
