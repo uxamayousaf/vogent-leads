@@ -2,25 +2,26 @@ name: Find Leads
 
 on:
   schedule:
-    - cron: "0 0,8,16 * * *"   # about 5 AM, 1 PM, 9 PM Pakistan time
-  workflow_dispatch:            # adds a "Run workflow" button for manual runs
+    - cron: "37 3 * * *"   # 8:37 AM Pakistan time daily, list ready before 11 AM
+  workflow_dispatch:        # adds a "Run workflow" button for manual runs
 
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 150
+    timeout-minutes: 120
     strategy:
       fail-fast: false
-      max-parallel: 16
+      max-parallel: 20
       matrix:
-        category: ["GHL / CRM", "Performance Marketing", "Virtual Assistant", "Customer Service"]
-        region: ["US", "UK", "Europe", "UAE"]
+        category: ["CRM Automation", "AI Automation", "RevOps", "Bookkeeping",
+                   "Performance Marketing", "Virtual Assistant", "Customer Service"]
+        region: ["USA / Canada", "UK / Europe / EMEA", "Gulf", "Australia / NZ", "Asia (English)"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install python-jobspy requests
+      - run: pip install python-jobspy requests langdetect
       - run: python find_leads.py
         env:
           CATEGORY: ${{ matrix.category }}
