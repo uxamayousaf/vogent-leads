@@ -2,8 +2,7 @@ name: Find Leads
 
 on:
   schedule:
-    - cron: "7 1 * * *"    # 6:07 AM Pakistan time (main run)
-    - cron: "7 4 * * *"    # 9:07 AM Pakistan time (backup, in case the first is delayed)
+    - cron: "7 1 * * *"    # 6:07 AM Pakistan time daily, one run, list ready before 11 AM
   workflow_dispatch:        # adds a "Run workflow" button for manual runs
 
 jobs:
