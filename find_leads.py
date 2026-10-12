@@ -187,6 +187,60 @@ REQUIRE_WORDS = ["fluent", "fluency", "native", "proficient", "proficiency", "re
 PLUS_WORDS = ["plus", "preferred", "nice to have", "bonus", "advantage", "asset",
               "desirable", "beneficial", "helpful", "ideally"]
 
+# ---------- Key skills (shown in the sheet and used in each custom note) ----------
+# (name shown, words to look for in the job description)
+SKILLS = [
+    ("GHL", ["gohighlevel", "go high level", "highlevel", "ghl"]),
+    ("HubSpot", ["hubspot"]), ("Salesforce", ["salesforce"]), ("Zoho", ["zoho"]),
+    ("Keap", ["keap", "infusionsoft"]), ("ActiveCampaign", ["activecampaign"]),
+    ("Pipedrive", ["pipedrive"]), ("Zapier", ["zapier"]), ("Make", ["make.com", "integromat"]),
+    ("n8n", ["n8n"]), ("Airtable", ["airtable"]), ("AI agents", ["ai agent", "ai agents"]),
+    ("chatbots", ["chatbot", "chatbots", "voiceflow"]), ("voice AI", ["voice agent", "voice ai", "vapi", "retell"]),
+    ("OpenAI", ["openai", "chatgpt", "gpt-4", "gpt api"]), ("APIs and webhooks", ["webhook", "webhooks", "api integration", "api integrations"]),
+    ("funnels", ["funnel", "funnels"]), ("landing pages", ["landing page", "landing pages"]),
+    ("SMS campaigns", ["sms"]), ("email campaigns", ["email campaign", "email campaigns", "email marketing", "drip"]),
+    ("workflows", ["workflow", "workflows", "automations"]), ("pipelines", ["pipeline management", "pipelines"]),
+    ("lead routing", ["lead routing"]), ("forecasting", ["forecasting", "forecast"]), ("attribution", ["attribution"]),
+    ("dashboards", ["dashboards", "reporting dashboards"]),
+    ("Meta Ads", ["meta ads", "facebook ads", "instagram ads", "facebook advertising"]),
+    ("Google Ads", ["google ads", "adwords", "google search ads"]), ("TikTok Ads", ["tiktok ads"]),
+    ("LinkedIn Ads", ["linkedin ads"]), ("PPC", ["ppc", "paid search"]), ("ROAS", ["roas"]),
+    ("creative testing", ["creative testing", "a/b testing", "ab testing"]), ("GA4", ["ga4", "google analytics"]),
+    ("retargeting", ["retargeting", "remarketing"]), ("Shopify", ["shopify"]),
+    ("QuickBooks", ["quickbooks", "qbo"]), ("Xero", ["xero"]), ("month-end close", ["month-end", "month end close"]),
+    ("reconciliations", ["reconciliation", "reconciliations", "reconcile"]), ("payroll", ["payroll", "gusto"]),
+    ("payables", ["accounts payable"]), ("receivables", ["accounts receivable"]), ("invoicing", ["invoicing", "invoices"]),
+    ("sales tax", ["sales tax"]), ("financial reports", ["financial statements", "financial reporting", "p&l"]),
+    ("calendar management", ["calendar management", "calendar"]), ("inbox management", ["inbox management", "inbox", "email management"]),
+    ("scheduling", ["scheduling", "appointment setting", "appointments"]), ("data entry", ["data entry"]),
+    ("travel booking", ["travel arrangements", "travel booking"]), ("transaction coordination", ["transaction coordination", "transaction coordinator"]),
+    ("CRM updates", ["crm updates", "updating the crm", "crm data"]), ("research", ["research"]),
+    ("social media", ["social media"]), ("Google Workspace", ["google workspace", "g suite"]),
+    ("phone support", ["phone support", "inbound calls", "answering calls", "phone calls"]),
+    ("live chat", ["live chat", "chat support"]), ("email support", ["email support"]),
+    ("Zendesk", ["zendesk"]), ("Freshdesk", ["freshdesk"]), ("Intercom", ["intercom"]), ("Gorgias", ["gorgias"]),
+    ("ticketing", ["ticketing", "tickets"]), ("returns and refunds", ["returns", "refunds"]),
+    ("order support", ["order status", "order issues", "orders"]),
+]
+SKILL_REGEXES = None  # built on first use
+
+# ---------- Location-locked filter ----------
+# Jobs that REQUIRE the person to live in a specific country / place are skipped,
+# even if the job is remote ("must be located in the US", "Remote (US only)", "UK residents only").
+_PLACES = (r"(?:US|U\.S\.?|USA|U\.S\.A\.?|United States|UK|U\.K\.?|United Kingdom|EU|Europe|Canada|Germany|"
+           r"Australia|New Zealand|UAE|Singapore|Ireland|Netherlands|France|Spain|Switzerland|"
+           r"Saudi Arabia|Qatar|Malaysia|Hong Kong|South Africa|North America|EST|PST|CST)")
+LOCATION_LOCK_PATTERNS = [
+    re.compile(r"\b[Mm]ust\s+(?:be\s+)?(?:currently\s+)?(?:located|based|residing|reside|live|living)\s+(?:in|within)\s+(?:the\s+)?[A-Z]"),
+    re.compile(r"\b" + _PLACES + r"[\s-]*(?:based\s+)?(?:residents?|citizens?|candidates?|applicants?|persons?)\s+only\b", re.I),
+    re.compile(r"\b(?:only|exclusively)\s+(?:open\s+to|accepting|considering|hiring)\s+(?:candidates|applicants|people|those|individuals)"
+               r"\s+(?:who\s+(?:are|live)\s+)?(?:located|based|residing|living|in|from)\b", re.I),
+    re.compile(r"\(\s*" + _PLACES + r"[\s-]*only\s*\)", re.I),
+    re.compile(r"\b(?:remote|work from home|wfh)\W{1,3}" + _PLACES + r"[\s-]*only\b", re.I),
+    re.compile(r"\b[Mm]ust\s+(?:be\s+)?(?:a\s+)?(?:US|U\.S\.|UK|Canadian|American|German|Australian)\s+(?:citizen|resident)"),
+    re.compile(r"\bcandidates?\s+(?:must|need to|should)\s+(?:be\s+)?(?:located|based|residing)\s+in\b", re.I),
+]
+
 ONSITE_PHRASES = [
     "on-site", "onsite", "on site", "in office", "in-office", "in person",
     "in-person", "must be able to commute", "must reside within",
@@ -270,6 +324,11 @@ def needs_other_language(desc):
     return False
 
 
+def location_locked(title, location, desc):
+    blob = title + " | " + location + " | " + desc
+    return any(p.search(blob) for p in LOCATION_LOCK_PATTERNS)
+
+
 def work_type(row, title, desc):
     head = (text(row.get("location")) + " " + title).lower()
     d = desc.lower()
@@ -282,6 +341,62 @@ def work_type(row, title, desc):
     if "remote" in d:
         return "Remote (mentioned)"
     return "Not stated"
+
+
+def key_skills(title, desc, limit=3):
+    """Finds up to 3 tools / tasks named in the job, in the order the post mentions them.
+    Skips anything already in the job title so the note does not repeat itself."""
+    global SKILL_REGEXES
+    if SKILL_REGEXES is None:
+        SKILL_REGEXES = [(name, [build_regex(w) for w in words]) for name, words in SKILLS]
+    source = desc or title
+    hits = []
+    for name, regs in SKILL_REGEXES:
+        if any(r.search(title) for r in regs):
+            continue
+        pos = min((m.start() for r in regs for m in [r.search(source)] if m), default=None)
+        if pos is not None:
+            hits.append((pos, name))
+    return [n for _, n in sorted(hits)][:limit]
+
+
+def join_words(items):
+    return items[0] if len(items) == 1 else ", ".join(items[:-1]) + " and " + items[-1]
+
+
+def connection_note(company, role, category, skills, work):
+    """Custom note per lead, under LinkedIn's 300 character limit. No pitch, ends with a question.
+    On-site / Hybrid jobs get the "hiring locally or remote" question; remote jobs get the other styles."""
+    if category == "Virtual Assistant":
+        role = "assistant"           # keep "VA" wording out of outreach copy
+    role = role if len(role) <= 45 else role[:45].rsplit(" ", 1)[0]
+    a_role = ("an " if role[:1].lower() in "aeiou" else "a ") + role
+    local_angle = work in ("On-site", "Hybrid")
+    for n in (3, 2, 1, 0):
+        sk = skills[:n]
+        if sk:
+            s_txt = join_words(sk)
+            if local_angle:
+                note = (f"Hi, came across the {role} opening at {company}. Strong {s_txt} experience "
+                        f"{'is a tough mix' if len(sk) > 1 else 'is hard'} to find. Are you set on hiring locally, "
+                        f"or open to remote talent? Happy to connect.")
+            else:
+                options = [
+                    f"Hi, saw {company} is hiring {a_role} to handle {s_txt}. That usually means a busy stretch "
+                    f"for the team. Still looking, or close to filling it? Would be good to connect.",
+                    f"Hi, noticed {company} needs someone strong on {s_txt}. How is the search for your {role} "
+                    f"going so far? Would be glad to connect.",
+                ]
+                note = options[sum(map(ord, company + role)) % 2]   # same lead always gets the same style
+        elif local_angle:
+            note = (f"Hi, saw {company} is hiring {a_role}. Are you set on hiring locally, or open to remote "
+                    f"talent? Happy to connect.")
+        else:
+            note = (f"Hi, saw {company} is hiring {a_role}. Are you still looking, or close to filling it? "
+                    f"Would be good to connect.")
+        if len(note) <= 300:
+            return note
+    return note[:297].rsplit(" ", 1)[0] + "..."
 
 
 def priority(title, desc, company, industry):
@@ -353,7 +468,7 @@ def search(term, n, location):
 
 def main():
     found = {}
-    checked, ex_agency, ex_big, ex_lang, ex_incomplete = set(), set(), set(), set(), set()
+    checked, ex_agency, ex_big, ex_lang, ex_incomplete, ex_loc = set(), set(), set(), set(), set(), set()
     ran = []
 
     for region_name, rcfg in REGIONS.items():
@@ -386,7 +501,7 @@ def main():
                             continue
                         # Same job seen twice counts once (company + title)
                         key = re.sub(r"\W+", "", company.lower()) + "|" + re.sub(r"\W+", "", title.lower())
-                        if key in found or key in ex_agency or key in ex_big or key in ex_lang:
+                        if key in found or key in ex_agency or key in ex_big or key in ex_lang or key in ex_loc:
                             continue
                         checked.add(key)
                         desc = text(row.get("description"))
@@ -396,6 +511,9 @@ def main():
                             continue
                         if not is_english(desc) or needs_other_language(desc):
                             ex_lang.add(key)
+                            continue
+                        if location_locked(title, text(row.get("location")), desc):
+                            ex_loc.add(key)
                             continue
                         if is_agency(company, industry, desc):
                             ex_agency.add(key)
@@ -407,6 +525,9 @@ def main():
                             continue
 
                         p_label, p_rank = priority(title, desc, company, industry)
+                        skills = key_skills(title, desc)
+                        role = short_role(title)
+                        wtype = work_type(row, title, desc)
                         found[key] = {
                             "id": key,
                             "posted": posted,
@@ -416,10 +537,12 @@ def main():
                             "region": short,
                             "region_rank": rcfg["rank"],
                             "title": title,
-                            "role": short_role(title),
+                            "role": role,
+                            "skills": " · ".join(skills),
+                            "note": connection_note(company, role, cat_name, skills, wtype),
                             "company": company,
                             "size": size_label,
-                            "work_type": work_type(row, title, desc),
+                            "work_type": wtype,
                             "evidence": evidence(desc, regexes),
                             "url": url,
                             "company_url": company_url,
@@ -432,14 +555,15 @@ def main():
     leads = sorted(found.values(), key=lambda l: (
         l["priority_rank"], l["region_rank"], WORK_ORDER.get(l["work_type"], 9), l["posted"]))
     print(f"\nChecked {len(checked)} | agencies {len(ex_agency)} | big {len(ex_big)} | "
-          f"non-English {len(ex_lang)} | incomplete {len(ex_incomplete)} | matches {len(leads)}")
+          f"non-English {len(ex_lang)} | location-locked {len(ex_loc)} | incomplete {len(ex_incomplete)} | "
+          f"matches {len(leads)}")
 
     r = requests.post(
         WEBAPP_URL,
         json={"token": TOKEN, "category": ", ".join(ran), "leads": leads,
               "checked": len(checked), "excluded": len(ex_agency),
               "excluded_big": len(ex_big), "excluded_lang": len(ex_lang),
-              "excluded_incomplete": len(ex_incomplete)},
+              "excluded_incomplete": len(ex_incomplete), "excluded_location": len(ex_loc)},
         timeout=180,
     )
     print("Sheet response:", r.text[:300])
