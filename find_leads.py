@@ -28,6 +28,7 @@ HOURS_OLD = 26          # one run per day, 26h window so nothing slips between d
 MAX_EMPLOYEES = 200     # companies bigger than this are skipped (unknown size is kept)
 
 LI, IN, ZR, GO = "linkedin", "indeed", "zip_recruiter", "google"
+SOURCE_NAMES = {LI: "LinkedIn", IN: "Indeed", ZR: "ZipRecruiter", GO: "Google Jobs"}
 
 # rank = order in your sheet. scale = fewer results per search for smaller markets.
 # Each location: (search location, Indeed country or None, sites, short name shown in sheet)
@@ -406,7 +407,12 @@ def main():
                         # Same job on several sites counts once (company + title)
                         key = (re.sub(r"\W+", "", company.lower()) + "|" +
                                re.sub(r"\W+", "", title.lower())) if company else url
-                        if not url or key in found or key in ex_agency or key in ex_big or key in ex_lang:
+                        source = SOURCE_NAMES.get(text(row.get("site")), text(row.get("site")))
+                        if key in found:  # same job on another site: just note the extra source
+                            if source and source not in found[key]["source"]:
+                                found[key]["source"] += ", " + source
+                            continue
+                        if not url or key in ex_agency or key in ex_big or key in ex_lang:
                             continue
                         checked.add(key)
                         desc = text(row.get("description"))
@@ -435,6 +441,7 @@ def main():
                             "category": cat_name,
                             "region": short,
                             "region_rank": rcfg["rank"],
+                            "source": source,
                             "title": title,
                             "role": short_role(title),
                             "company": company,
