@@ -1,8 +1,8 @@
 """
 VOGENT LEAD FINDER (JobSpy version)
-Searches LinkedIn, Indeed, ZipRecruiter and Google Jobs (Google also covers
-SimplyHired, beBee and company career pages) across 5 region groups.
+Searches LinkedIn Jobs across 5 region groups, once every morning.
 Reads the FULL description and keeps only:
+  - complete jobs (title, company, date and link all present)
   - real matches for your roles
   - English-language jobs that do not require another language
   - direct employers (no agencies) with 200 staff or fewer (unknown size kept)
@@ -24,41 +24,28 @@ from langdetect import DetectorFactory, detect
 DetectorFactory.seed = 0
 
 # ============================ SETTINGS ============================
-HOURS_OLD = 26          # one run per day, 26h window so nothing slips between days
+HOURS_OLD = 48          # one run per day, 48h window catches anything missed yesterday
 MAX_EMPLOYEES = 200     # companies bigger than this are skipped (unknown size is kept)
 
-LI, IN, ZR, GO = "linkedin", "indeed", "zip_recruiter", "google"
-SOURCE_NAMES = {LI: "LinkedIn", IN: "Indeed", ZR: "ZipRecruiter", GO: "Google Jobs"}
-
 # rank = order in your sheet. scale = fewer results per search for smaller markets.
-# Each location: (search location, Indeed country or None, sites, short name shown in sheet)
+# Each location: (LinkedIn search location, short name shown in sheet)
 REGIONS = {
     "USA / Canada": {"enabled": True, "rank": 1, "scale": 1.0, "locations": [
-        ("United States", "USA", [LI, IN, ZR, GO], "USA"),
-        ("Canada", "Canada", [LI, IN, ZR, GO], "Canada"),
+        ("United States", "USA"), ("Canada", "Canada"),
     ]},
     "UK / Europe / EMEA": {"enabled": True, "rank": 2, "scale": 0.6, "locations": [
-        ("United Kingdom", "UK", [LI, IN, GO], "UK"),
-        ("European Union", None, [LI, GO], "Europe"),
-        ("Switzerland", "Switzerland", [LI, IN, GO], "Switzerland"),
-        ("South Africa", "South Africa", [LI, IN, GO], "South Africa"),
+        ("United Kingdom", "UK"), ("European Union", "Europe"),
+        ("Switzerland", "Switzerland"), ("South Africa", "South Africa"),
     ]},
     "Gulf": {"enabled": True, "rank": 3, "scale": 0.5, "locations": [
-        ("United Arab Emirates", "United Arab Emirates", [LI, IN, GO], "UAE"),
-        ("Saudi Arabia", "Saudi Arabia", [LI, IN, GO], "Saudi Arabia"),
-        ("Qatar", "Qatar", [LI, IN, GO], "Qatar"),
-        ("Kuwait", None, [LI, GO], "Kuwait"),
-        ("Bahrain", None, [LI, GO], "Bahrain"),
-        ("Oman", None, [LI, GO], "Oman"),
+        ("United Arab Emirates", "UAE"), ("Saudi Arabia", "Saudi Arabia"), ("Qatar", "Qatar"),
+        ("Kuwait", "Kuwait"), ("Bahrain", "Bahrain"), ("Oman", "Oman"),
     ]},
     "Australia / NZ": {"enabled": True, "rank": 4, "scale": 0.6, "locations": [
-        ("Australia", "Australia", [LI, IN, GO], "Australia"),
-        ("New Zealand", "New Zealand", [LI, IN, GO], "New Zealand"),
+        ("Australia", "Australia"), ("New Zealand", "New Zealand"),
     ]},
     "Asia (English)": {"enabled": True, "rank": 5, "scale": 0.5, "locations": [
-        ("Singapore", "Singapore", [LI, IN, GO], "Singapore"),
-        ("Malaysia", "Malaysia", [LI, IN, GO], "Malaysia"),
-        ("Hong Kong", "Hong Kong", [LI, IN, GO], "Hong Kong"),
+        ("Singapore", "Singapore"), ("Malaysia", "Malaysia"), ("Hong Kong", "Hong Kong"),
     ]},
 }
 
@@ -345,40 +332,28 @@ def company_size(company_url, row):
     return result
 
 
-def search(term, n, location, indeed_country, sites):
-    google_place = "Europe" if location == "European Union" else location
-    kwargs = dict(
-        search_term=term,
-        google_search_term=f"{term} jobs in {google_place} since yesterday",
-        location=location,
-        results_wanted=n,
-        hours_old=HOURS_OLD,
-        linkedin_fetch_description=True,
-    )
-    use_sites = [s for s in sites if not (s == IN and not indeed_country)]
-    for attempt in range(2):
-        try:
-            if IN in use_sites:
-                kwargs["country_indeed"] = indeed_country
-            else:
-                kwargs.pop("country_indeed", None)
-            df = scrape_jobs(site_name=use_sites, **kwargs)
-            print(f"  {term} | {location}: {len(df)} jobs")
-            return df
-        except Exception as e:
-            print(f"  {term} | {location}: failed ({e})")
-            if IN in use_sites and attempt == 0:
-                use_sites = [s for s in use_sites if s != IN]  # retry without Indeed
-                continue
-            return None
-        finally:
-            time.sleep(4)
-    return None
+def search(term, n, location):
+    try:
+        df = scrape_jobs(
+            site_name=["linkedin"],
+            search_term=term,
+            location=location,
+            results_wanted=n,
+            hours_old=HOURS_OLD,
+            linkedin_fetch_description=True,
+        )
+        print(f"  {term} | {location}: {len(df)} jobs")
+        return df
+    except Exception as e:
+        print(f"  {term} | {location}: failed ({e})")
+        return None
+    finally:
+        time.sleep(4)
 
 
 def main():
     found = {}
-    checked, ex_agency, ex_big, ex_lang = set(), set(), set(), set()
+    checked, ex_agency, ex_big, ex_lang, ex_incomplete = set(), set(), set(), set(), set()
     ran = []
 
     for region_name, rcfg in REGIONS.items():
@@ -395,24 +370,23 @@ def main():
             terms = [(t, deep_n) for t in cfg["deep_searches"]] + \
                     [(t, normal_n) for t in cfg["searches"]]
 
-            for location, indeed_country, sites, short in rcfg["locations"]:
+            for location, short in rcfg["locations"]:
                 for term, n in terms:
-                    df = search(term, n, location, indeed_country, sites)
+                    df = search(term, n, location)
                     if df is None or not len(df):
                         continue
                     for _, row in df.iterrows():
                         url = text(row.get("job_url"))
-                        title = text(row.get("title"))
-                        company = text(row.get("company"))
-                        # Same job on several sites counts once (company + title)
-                        key = (re.sub(r"\W+", "", company.lower()) + "|" +
-                               re.sub(r"\W+", "", title.lower())) if company else url
-                        source = SOURCE_NAMES.get(text(row.get("site")), text(row.get("site")))
-                        if key in found:  # same job on another site: just note the extra source
-                            if source and source not in found[key]["source"]:
-                                found[key]["source"] += ", " + source
+                        title = text(row.get("title")).strip()
+                        company = text(row.get("company")).strip()
+                        posted = text(row.get("date_posted")).strip()
+                        # Half-loaded LinkedIn cards are skipped, never added
+                        if not (url and title and company and posted):
+                            ex_incomplete.add(url or str(len(ex_incomplete)))
                             continue
-                        if not url or key in ex_agency or key in ex_big or key in ex_lang:
+                        # Same job seen twice counts once (company + title)
+                        key = re.sub(r"\W+", "", company.lower()) + "|" + re.sub(r"\W+", "", title.lower())
+                        if key in found or key in ex_agency or key in ex_big or key in ex_lang:
                             continue
                         checked.add(key)
                         desc = text(row.get("description"))
@@ -435,13 +409,12 @@ def main():
                         p_label, p_rank = priority(title, desc, company, industry)
                         found[key] = {
                             "id": key,
-                            "posted": text(row.get("date_posted")),
+                            "posted": posted,
                             "priority": p_label,
                             "priority_rank": p_rank,
                             "category": cat_name,
                             "region": short,
                             "region_rank": rcfg["rank"],
-                            "source": source,
                             "title": title,
                             "role": short_role(title),
                             "company": company,
@@ -459,13 +432,14 @@ def main():
     leads = sorted(found.values(), key=lambda l: (
         l["priority_rank"], l["region_rank"], WORK_ORDER.get(l["work_type"], 9), l["posted"]))
     print(f"\nChecked {len(checked)} | agencies {len(ex_agency)} | big {len(ex_big)} | "
-          f"non-English {len(ex_lang)} | matches {len(leads)}")
+          f"non-English {len(ex_lang)} | incomplete {len(ex_incomplete)} | matches {len(leads)}")
 
     r = requests.post(
         WEBAPP_URL,
         json={"token": TOKEN, "category": ", ".join(ran), "leads": leads,
               "checked": len(checked), "excluded": len(ex_agency),
-              "excluded_big": len(ex_big), "excluded_lang": len(ex_lang)},
+              "excluded_big": len(ex_big), "excluded_lang": len(ex_lang),
+              "excluded_incomplete": len(ex_incomplete)},
         timeout=180,
     )
     print("Sheet response:", r.text[:300])
