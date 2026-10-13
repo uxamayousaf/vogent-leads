@@ -90,6 +90,21 @@ CATEGORIES = {
             "marketing operations", "gtm operations",
         ],
     },
+    "SEO": {
+        # US / UK clients only, so it is searched in those two region groups
+        "enabled": True, "deep_results": 80, "normal_results": 40,
+        "regions": ["USA / Canada", "UK / Europe / EMEA"],
+        "deep_searches": ["SEO Specialist", "SEO Manager"],
+        "searches": [
+            "SEO Analyst", "SEO Strategist", "Technical SEO", "Local SEO", "SEO Executive",
+            "Search Engine Optimization", "Link Building Specialist", "SEO Content Specialist",
+        ],
+        "must_mention": [
+            "seo", "search engine optimization", "on-page", "off-page", "link building",
+            "keyword research", "technical seo", "local seo", "google search console",
+            "semrush", "ahrefs", "moz",
+        ],
+    },
     "Bookkeeping": {
         "enabled": True, "deep_results": 80, "normal_results": 30,
         "deep_searches": ["Bookkeeper", "Remote Bookkeeper"],
@@ -219,6 +234,10 @@ SKILLS = [
     ("LinkedIn Ads", ["linkedin ads"]), ("PPC", ["ppc", "paid search"]), ("ROAS", ["roas"]),
     ("creative testing", ["creative testing", "a/b testing", "ab testing"]), ("GA4", ["ga4", "google analytics"]),
     ("retargeting", ["retargeting", "remarketing"]), ("Shopify", ["shopify"]),
+    ("SEMrush", ["semrush"]), ("Ahrefs", ["ahrefs"]), ("Search Console", ["google search console", "search console"]),
+    ("keyword research", ["keyword research"]), ("link building", ["link building", "backlinks"]),
+    ("technical SEO", ["technical seo", "site audits", "site audit"]), ("on-page SEO", ["on-page", "on page seo"]),
+    ("local SEO", ["local seo", "google business profile", "gmb"]), ("WordPress", ["wordpress"]),
     ("QuickBooks", ["quickbooks", "qbo"]), ("Xero", ["xero"]), ("month-end close", ["month-end", "month end close"]),
     ("reconciliations", ["reconciliation", "reconciliations", "reconcile"]), ("payroll", ["payroll", "gusto"]),
     ("payables", ["accounts payable"]), ("receivables", ["accounts receivable"]), ("invoicing", ["invoicing", "invoices"]),
@@ -447,17 +466,15 @@ def parse_size(raw):
 
 
 def company_size(company_url, row):
-    """Returns (size label, smallest headcount or None, industry from the company page)."""
-    js = text(row.get("company_num_employees"))
-    if js:
-        label, mn = parse_size(js)
-        return label, mn, ""
+    """Returns (size label, smallest headcount or None, industry, website) from the company page."""
     url = company_url.split("?")[0].rstrip("/")
     if "linkedin.com/company/" not in url:
-        return "Unknown", None, ""
+        js = text(row.get("company_num_employees"))
+        label, mn = parse_size(js) if js else ("Unknown", None)
+        return label, mn, "", ""
     if url in SIZE_CACHE:
         return SIZE_CACHE[url]
-    result = ("Unknown", None, "")
+    result = ("Unknown", None, "", "")
     try:
         r = requests.get(url + "/", headers=UA, timeout=20, allow_redirects=True)
         if r.status_code == 200 and "authwall" not in r.url:
@@ -465,7 +482,7 @@ def company_size(company_url, row):
             m = re.search(r"Company size\s*([\d,]+\s*(?:-\s*[\d,]+)?\+?)\s*employees", plain, re.I)
             ind = re.search(r"Industry\s+(.{3,60}?)\s+(?:Company size|Headquarters|Type|Founded)", plain)
             label, mn = parse_size(m.group(1)) if m else ("Unknown", None)
-            result = (label, mn, ind.group(1).strip() if ind else "")
+            result = (label, mn, ind.group(1).strip() if ind else "", company_website(r.text))
     except Exception:
         pass
     SIZE_CACHE[url] = result
@@ -514,6 +531,23 @@ def job_id_of(row):
     return m.group(1) if m else ""
 
 
+def company_website(html):
+    """Finds the company's own website link on its public LinkedIn page."""
+    from urllib.parse import parse_qs, unquote, urlparse
+    for tag in re.findall(r"<a[^>]+>", html):
+        if "about_website" not in tag and "website" not in tag.lower():
+            continue
+        href = re.search(r'href="([^"]+)"', tag)
+        if not href:
+            continue
+        link = href.group(1).replace("&amp;", "&")
+        if "linkedin.com/redir" in link:
+            link = unquote(parse_qs(urlparse(link).query).get("url", [""])[0])
+        if link.startswith("http") and "linkedin.com" not in link:
+            return link
+    return ""
+
+
 def search(term, n, location, remote=False):
     try:
         df = scrape_jobs(
@@ -544,6 +578,8 @@ def main():
             continue
         for cat_name, cfg in CATEGORIES.items():
             if not cfg["enabled"] or (ONLY_CATEGORY and cat_name != ONLY_CATEGORY):
+                continue
+            if cfg.get("regions") and region_name not in cfg["regions"]:
                 continue
             ran.append(f"{cat_name} | {region_name}")
             print(f"\n== {cat_name} | {region_name} ==")
@@ -588,7 +624,7 @@ def main():
                             ex_agency.add(key)
                             continue
                         company_url = text(row.get("company_url")).split("?")[0]
-                        size_label, size_min, page_industry = company_size(company_url, row)
+                        size_label, size_min, page_industry, website = company_size(company_url, row)
                         if size_min is not None and size_min > MAX_EMPLOYEES:
                             ex_big.add(key)
                             continue
@@ -626,6 +662,7 @@ def main():
                             "industry": page_industry or industry,
                             "direct": not strict_agency(company, page_industry or industry, desc),
                             "us_benefits": us_benefits(desc),
+                            "website": website,
                         }
 
     if not ran:
