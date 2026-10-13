@@ -14,7 +14,7 @@ jobs:
       fail-fast: false
       max-parallel: 20
       matrix:
-        category: ["CRM Automation", "AI Automation", "RevOps", "Bookkeeping",
+        category: ["CRM Automation", "AI Automation", "SEO", "RevOps", "Bookkeeping",
                    "Performance Marketing", "Virtual Assistant", "Customer Service"]
         region: ["USA / Canada", "UK / Europe / EMEA", "Gulf", "Australia / NZ", "Asia (English)"]
     steps:
