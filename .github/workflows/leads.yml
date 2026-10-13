@@ -6,9 +6,10 @@ on:
   workflow_dispatch:        # adds a "Run workflow" button for manual runs
 
 jobs:
+  # ---------- Phase 1: job search ----------
   scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 150
     strategy:
       fail-fast: false
       max-parallel: 20
@@ -28,3 +29,32 @@ jobs:
           REGION: ${{ matrix.region }}
           SHEET_WEBAPP_URL: ${{ secrets.SHEET_WEBAPP_URL }}
           SHEET_TOKEN: ${{ secrets.SHEET_TOKEN }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: candidates-${{ strategy.job-index }}
+          path: candidates/
+          if-no-files-found: ignore
+          retention-days: 2
+
+  # ---------- Phase 2, Step A: daily outreach queue ----------
+  outreach:
+    needs: scrape
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install requests
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: candidates-*
+          path: candidates
+          merge-multiple: true
+      - run: python outreach.py
+        env:
+          SHEET_WEBAPP_URL: ${{ secrets.SHEET_WEBAPP_URL }}
+          SHEET_TOKEN: ${{ secrets.SHEET_TOKEN }}
+          APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}
