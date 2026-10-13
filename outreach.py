@@ -41,7 +41,9 @@ APIFY_MAX_PEOPLE = 40                    # most people looked up in one pass
 # Job boards, job aggregators and "entry level, commission" style posts are never contacted
 NOT_EMPLOYER_NAME_WORDS = ["careers", "jobs", "job board", "jobboard", "hiring", "hunter", "recruit",
                            "staffing", "talent", "wiraa", "remotehunter", "jobot", "dice", "ziprecruiter",
-                           "abilitylinks", "linkedin", "indeed", "glassdoor", "upwork", "fiverr"]
+                           "abilitylinks", "linkedin", "indeed", "glassdoor", "upwork", "fiverr",
+                           "jobgether", "town of", "city of", "county", "government", "ministry",
+                           "municipality", "university", "school district", "college"]
 NOT_EMPLOYER_TITLE_WORDS = ["entry level client", "client relations associate", "booking hotels",
                             "travel agent", "brand ambassador", "commission only", "commission-only"]
 APIFY_DAILY_BUDGET_USD = 0.24            # both lookup passes together (about $5 a month on weekdays)
@@ -288,7 +290,14 @@ BAD_DOMAIN = ["example.com", "domain.com", "sentry", "wixpress", "godaddy", "squ
               "email.com", "yourdomain", "company.com", "mysite", "schema.org", "w3.org"]
 HIRING_LOCAL = ["careers", "career", "jobs", "job", "hr", "hiring", "recruit", "talent", "people", "work"]
 GENERAL_LOCAL = ["hello", "hi", "info", "contact", "team", "office", "admin", "sales", "inquiries",
-                 "enquiries", "support", "help", "connect", "mail", "general"]
+                 "enquiries", "connect", "mail", "general"]
+LAST_RESORT_LOCAL = ["support", "help", "care", "service", "customerservice", "orders", "shop", "store"]
+DEPARTMENT_WORDS = ["marketing", "art", "design", "creative", "studio", "partners", "partnerships",
+                    "business", "newbusiness", "growth", "ops", "operations", "finance", "booking",
+                    "bookings", "reservations", "events", "membership", "members", "social", "digital",
+                    "web", "dev", "tech", "it", "ask", "enquiry", "inquiry", "questions", "feedback",
+                    "contactus", "appointments", "reception", "frontdesk", "staff", "media", "pr",
+                    "brand", "content", "projects", "studio", "agency", "accounts", "billing"]
 PAGES = ["", "contact", "contact-us", "about", "about-us", "team", "our-team", "careers", "jobs"]
 UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                     "(KHTML, like Gecko) Chrome/126 Safari/537.36"}
@@ -332,8 +341,10 @@ def find_email(website):
             continue                                            # only the company's own domain
         if local in HIRING_LOCAL or any(local.startswith(h) for h in HIRING_LOCAL):
             kind, rank = "hiring", 1
-        elif local in GENERAL_LOCAL:
+        elif local in GENERAL_LOCAL or local in DEPARTMENT_WORDS:
             kind, rank = "general", 2
+        elif local in LAST_RESORT_LOCAL:
+            kind, rank = "general", 4
         elif re.fullmatch(r"[a-z]{2,15}(\.[a-z]{2,20})?", local):
             kind, rank = "personal", 0
         else:
@@ -362,7 +373,7 @@ def greeting(email, kind, company, first=""):
     local = email.split("@")[0]
     if kind == "personal":
         name = local.split(".")[0]
-        if 2 < len(name) <= 15:
+        if 3 < len(name) <= 15 and name not in DEPARTMENT_WORDS:
             return f"Hi {name.capitalize()},"
     return f"Hi {company} team," if len(company) <= 28 else "Hi there,"
 
