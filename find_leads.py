@@ -554,7 +554,11 @@ def main():
                         p_label, p_rank = priority(title, desc, company, industry)
                         skills = key_skills(title, desc)
                         role = short_role(title)
-                        wtype = "Remote" if remote_pass else work_type(row, title, desc)
+                        # The job's own text wins. LinkedIn's Remote filter is only trusted
+                        # when the post does not say On-site or Hybrid.
+                        wtype = work_type(row, title, desc)
+                        if remote_pass and wtype in ("Not stated", "Remote (mentioned)"):
+                            wtype = "Remote"
                         found[key] = {
                             "id": key,
                             "posted": posted,
