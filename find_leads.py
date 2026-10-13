@@ -290,8 +290,10 @@ def text(value):
 
 
 def short_role(title):
-    clean = re.sub(r"^[^\w]+", "", title)  # drop leading emojis/symbols
-    role = re.split(r"\s+[-|–—/]\s+|\(|\[|,|:", clean)[0].strip()
+    clean = re.sub(r"^[^\w]+", "", title)                       # drop leading emojis/symbols
+    clean = re.sub(r"^(?:remote|hybrid|on-?site)\s*[|:\-–—]\s*", "", clean, flags=re.I)  # "Remote | ..."
+    clean = re.split(r"\s+@\s+|\s+at\s+[A-Z]", clean)[0]          # "... @ Company" / "... at Company"
+    role = re.split(r"\s+[-|–—/]\s+|\s*\||\(|\[|,|:", clean)[0].strip()
     return role or clean
 
 
