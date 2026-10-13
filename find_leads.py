@@ -473,6 +473,47 @@ def company_size(company_url, row):
     return result
 
 
+US_BENEFIT_WORDS = ["401(k)", "401k", "dental", "vision insurance", "health insurance",
+                    "medical insurance", "medical, dental", "paid time off", "pto", "hsa", "fsa"]
+WT_LABELS = {"1": "On-site", "3": "Hybrid", "2": "Remote"}    # LinkedIn's workplace badge filters
+
+
+def us_benefits(desc):
+    d = desc.lower()
+    return sum(1 for w in US_BENEFIT_WORDS if w in d) >= 2       # two or more = full US benefits package
+
+
+def badge_map(term, location, pages=3):
+    """Reads LinkedIn's own On-site / Hybrid / Remote badges from the public search pages.
+    Returns {job_id: badge}. On-site and Hybrid always win over Remote."""
+    badges = {}
+    for wt in ("2", "3", "1"):                                   # Remote first, so On-site/Hybrid overwrite it
+        for page in range(pages):
+            try:
+                r = requests.get(
+                    "https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search",
+                    params={"keywords": term, "location": location, "f_TPR": f"r{HOURS_OLD * 3600}",
+                            "f_WT": wt, "start": page * 10},
+                    headers=UA, timeout=20)
+                if r.status_code != 200:
+                    break
+                ids = re.findall(r"jobPosting:(\d+)", r.text)
+                if not ids:
+                    break
+                for job_id in ids:
+                    badges[job_id] = WT_LABELS[wt]
+            except Exception:
+                break
+            finally:
+                time.sleep(1.5)
+    return badges
+
+
+def job_id_of(row):
+    m = re.search(r"/jobs/view/(\d+)", text(row.get("job_url"))) or re.search(r"(\d{6,})", text(row.get("id")))
+    return m.group(1) if m else ""
+
+
 def search(term, n, location, remote=False):
     try:
         df = scrape_jobs(
@@ -513,8 +554,9 @@ def main():
                     [(t, normal_n) for t in cfg["searches"]]
 
             for location, short in rcfg["locations"]:
-                for term, n, remote_pass in [(t, k, rp) for t, k in terms for rp in (True, False)]:
-                    df = search(term, max(10, n // 2) if remote_pass else n, location, remote_pass)
+                for term, n in terms:
+                    badges = badge_map(term, location)
+                    df = search(term, n, location)
                     if df is None or not len(df):
                         continue
                     for _, row in df.iterrows():
@@ -554,11 +596,13 @@ def main():
                         p_label, p_rank = priority(title, desc, company, industry)
                         skills = key_skills(title, desc)
                         role = short_role(title)
-                        # The job's own text wins. LinkedIn's Remote filter is only trusted
-                        # when the post does not say On-site or Hybrid.
+                        # Work type: clear wording in the post first, then LinkedIn's own badge
                         wtype = work_type(row, title, desc)
-                        if remote_pass and wtype in ("Not stated", "Remote (mentioned)"):
-                            wtype = "Remote"
+                        badge = badges.get(job_id_of(row), "")
+                        if badge and wtype in ("Not stated", "Remote (mentioned)"):
+                            wtype = badge
+                        elif badge in ("On-site", "Hybrid") and wtype == "Remote" and "remote" not in title.lower():
+                            wtype = badge                                # badge beats a loose "remote" mention
                         found[key] = {
                             "id": key,
                             "posted": posted,
@@ -581,6 +625,7 @@ def main():
                             "size_min": size_min,
                             "industry": page_industry or industry,
                             "direct": not strict_agency(company, page_industry or industry, desc),
+                            "us_benefits": us_benefits(desc),
                         }
 
     if not ran:
