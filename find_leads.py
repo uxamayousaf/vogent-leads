@@ -12,6 +12,7 @@ tags Remote / Hybrid / On-site, and sends everything to your Google Sheet.
 Each category + region group runs on its own GitHub machine in parallel.
 You only ever edit the SETTINGS section.
 """
+import json
 import os
 import re
 import time
@@ -175,6 +176,17 @@ AGENCY_PHRASES = [
     "for a client of ours", "client of ours",
 ]
 
+# Extra agency signals, used to keep the OUTREACH list strictly to direct employers
+STRICT_AGENCY_PHRASES = [
+    "staffing agency", "staffing firm", "staffing company", "staffing partner", "recruitment agency",
+    "recruiting agency", "recruiting firm", "recruitment firm", "talent agency", "placement agency",
+    "talent acquisition partner", "our client", "client is seeking", "client is looking", "for our client",
+    "on behalf of", "contract-to-hire", "contract to hire", "outsourcing company", "bpo",
+    "we connect talent", "we place candidates", "hiring on behalf", "virtual assistant agency",
+    "remote staffing", "offshore staffing", "we are a staffing", "we are a recruiting",
+]
+STRICT_INDUSTRY_WORDS = ["staffing", "recruit", "human resources services", "outsourcing", "employment"]
+
 # ---------- Language filter ----------
 OTHER_LANGUAGES = [
     "Dutch", "Flemish", "German", "French", "Spanish", "Italian", "Portuguese", "Polish",
@@ -324,21 +336,31 @@ def needs_other_language(desc):
     return False
 
 
+def strict_agency(company, industry, desc):
+    d, ind = desc.lower(), industry.lower()
+    return (is_agency(company, industry, desc) or any(w in ind for w in STRICT_INDUSTRY_WORDS)
+            or any(p in d for p in STRICT_AGENCY_PHRASES))
+
+
 def location_locked(title, location, desc):
     blob = title + " | " + location + " | " + desc
     return any(p.search(blob) for p in LOCATION_LOCK_PATTERNS)
 
 
+REMOTE_WORDS = ["remote", "work from home", "work-from-home", "wfh", "work from anywhere",
+                "fully distributed", "distributed team", "telecommute", "telecommuting"]
+
+
 def work_type(row, title, desc):
     head = (text(row.get("location")) + " " + title).lower()
     d = desc.lower()
-    if str(row.get("is_remote")).lower() == "true" or "remote" in head:
+    if str(row.get("is_remote")).lower() == "true" or any(w in head for w in REMOTE_WORDS):
         return "Remote"
     if "hybrid" in head or "hybrid" in d:
         return "Hybrid"
     if any(p in d for p in ONSITE_PHRASES):
         return "On-site"
-    if "remote" in d:
+    if any(w in d for w in REMOTE_WORDS):
         return "Remote (mentioned)"
     return "Not stated"
 
@@ -423,23 +445,25 @@ def parse_size(raw):
 
 
 def company_size(company_url, row):
-    """Returns (label, smallest headcount) or ("Unknown", None)."""
+    """Returns (size label, smallest headcount or None, industry from the company page)."""
     js = text(row.get("company_num_employees"))
     if js:
-        return parse_size(js)
+        label, mn = parse_size(js)
+        return label, mn, ""
     url = company_url.split("?")[0].rstrip("/")
     if "linkedin.com/company/" not in url:
-        return "Unknown", None
+        return "Unknown", None, ""
     if url in SIZE_CACHE:
         return SIZE_CACHE[url]
-    result = ("Unknown", None)
+    result = ("Unknown", None, "")
     try:
         r = requests.get(url + "/", headers=UA, timeout=20, allow_redirects=True)
         if r.status_code == 200 and "authwall" not in r.url:
             plain = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", r.text))
             m = re.search(r"Company size\s*([\d,]+\s*(?:-\s*[\d,]+)?\+?)\s*employees", plain, re.I)
-            if m:
-                result = parse_size(m.group(1))
+            ind = re.search(r"Industry\s+(.{3,60}?)\s+(?:Company size|Headquarters|Type|Founded)", plain)
+            label, mn = parse_size(m.group(1)) if m else ("Unknown", None)
+            result = (label, mn, ind.group(1).strip() if ind else "")
     except Exception:
         pass
     SIZE_CACHE[url] = result
@@ -447,7 +471,7 @@ def company_size(company_url, row):
     return result
 
 
-def search(term, n, location):
+def search(term, n, location, remote=False):
     try:
         df = scrape_jobs(
             site_name=["linkedin"],
@@ -455,9 +479,10 @@ def search(term, n, location):
             location=location,
             results_wanted=n,
             hours_old=HOURS_OLD,
+            is_remote=remote,              # True = LinkedIn's own "Remote" filter
             linkedin_fetch_description=True,
         )
-        print(f"  {term} | {location}: {len(df)} jobs")
+        print(f"  {term} | {location}{' | remote filter' if remote else ''}: {len(df)} jobs")
         return df
     except Exception as e:
         print(f"  {term} | {location}: failed ({e})")
@@ -486,8 +511,8 @@ def main():
                     [(t, normal_n) for t in cfg["searches"]]
 
             for location, short in rcfg["locations"]:
-                for term, n in terms:
-                    df = search(term, n, location)
+                for term, n, remote_pass in [(t, k, rp) for t, k in terms for rp in (True, False)]:
+                    df = search(term, max(10, n // 2) if remote_pass else n, location, remote_pass)
                     if df is None or not len(df):
                         continue
                     for _, row in df.iterrows():
@@ -519,7 +544,7 @@ def main():
                             ex_agency.add(key)
                             continue
                         company_url = text(row.get("company_url")).split("?")[0]
-                        size_label, size_min = company_size(company_url, row)
+                        size_label, size_min, page_industry = company_size(company_url, row)
                         if size_min is not None and size_min > MAX_EMPLOYEES:
                             ex_big.add(key)
                             continue
@@ -527,7 +552,7 @@ def main():
                         p_label, p_rank = priority(title, desc, company, industry)
                         skills = key_skills(title, desc)
                         role = short_role(title)
-                        wtype = work_type(row, title, desc)
+                        wtype = "Remote" if remote_pass else work_type(row, title, desc)
                         found[key] = {
                             "id": key,
                             "posted": posted,
@@ -546,6 +571,10 @@ def main():
                             "evidence": evidence(desc, regexes),
                             "url": url,
                             "company_url": company_url,
+                            # extra details for Phase 2 outreach (not shown in the Leads tab)
+                            "size_min": size_min,
+                            "industry": page_industry or industry,
+                            "direct": not strict_agency(company, page_industry or industry, desc),
                         }
 
     if not ran:
@@ -557,6 +586,12 @@ def main():
     print(f"\nChecked {len(checked)} | agencies {len(ex_agency)} | big {len(ex_big)} | "
           f"non-English {len(ex_lang)} | location-locked {len(ex_loc)} | incomplete {len(ex_incomplete)} | "
           f"matches {len(leads)}")
+
+    # Hand today's leads to the Phase 2 outreach step (GitHub passes this file along)
+    os.makedirs("candidates", exist_ok=True)
+    fname = re.sub(r"\W+", "_", (ONLY_CATEGORY or "all") + "_" + (ONLY_REGION or "all")) + ".json"
+    with open(os.path.join("candidates", fname), "w") as fh:
+        json.dump(leads, fh)
 
     r = requests.post(
         WEBAPP_URL,
