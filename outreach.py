@@ -24,8 +24,15 @@ REGION_ORDER = {"USA": 1, "Canada": 2, "UK": 3}
 ROLES = ["CRM Automation", "Virtual Assistant", "AI Automation", "Customer Service"]
 GHL_ONLY_FOR_CRM = True                  # CRM Automation leads only if the job mentions GHL
 APIFY_ACTOR = "harvestapi~linkedin-company-employees"
-APIFY_MAX_PEOPLE = 40                    # keeps usage inside Apify's free monthly credit
-APIFY_COST_CAP_USD = 0.25                # hard spending cap per daily run
+APIFY_MAX_PEOPLE = 40                    # most people looked up in one pass
+# Job boards, job aggregators and "entry level, commission" style posts are never contacted
+NOT_EMPLOYER_NAME_WORDS = ["careers", "jobs", "job board", "jobboard", "hiring", "hunter", "recruit",
+                           "staffing", "talent", "wiraa", "remotehunter", "jobot", "dice", "ziprecruiter",
+                           "abilitylinks", "linkedin", "indeed", "glassdoor", "upwork", "fiverr"]
+NOT_EMPLOYER_TITLE_WORDS = ["entry level client", "client relations associate", "booking hotels",
+                            "travel agent", "brand ambassador", "commission only", "commission-only"]
+APIFY_DAILY_BUDGET_USD = 0.24            # both lookup passes together (about $5 a month on weekdays)
+FOUNDER_TITLES = ["Founder", "Co-Founder", "CEO", "Owner", "President", "Managing Director"]
 SPECIALISTS = {
     "CRM Automation": "GoHighLevel specialists",
     "Virtual Assistant": "remote support specialists",
@@ -79,6 +86,9 @@ def eligible(l):
         return False
     if not l.get("direct", True):
         return False                       # staffing / recruiting / outsourcing: never contacted
+    comp, title = str(l.get("company", "")).lower(), str(l.get("title", "")).lower()
+    if any(w in comp for w in NOT_EMPLOYER_NAME_WORDS) or any(w in title for w in NOT_EMPLOYER_TITLE_WORDS):
+        return False                       # job boards, aggregators, entry-level commission posts
     size_min = l.get("size_min")
     if size_min is not None and size_min > MAX_COMPANY_SIZE:
         return False
@@ -97,42 +107,58 @@ def rank_key(l):
 
 
 # ---------- 2. Find decision makers with Apify ----------
-def apify_people(company_urls):
-    if not APIFY_TOKEN or not company_urls:
-        print("No Apify token or no LinkedIn company pages: skipping decision-maker lookup.")
+def apify_run(body, cost_cap):
+    base = "https://api.apify.com/v2"
+    run = requests.post(f"{base}/acts/{APIFY_ACTOR}/runs",
+                        params={"token": APIFY_TOKEN, "maxTotalChargeUsd": round(cost_cap, 2)},
+                        json=body, timeout=60).json()["data"]
+    run_id, dataset = run["id"], run["defaultDatasetId"]
+    status = ""
+    for _ in range(90):                                   # wait up to ~15 minutes
+        time.sleep(10)
+        status = requests.get(f"{base}/actor-runs/{run_id}", params={"token": APIFY_TOKEN},
+                              timeout=30).json()["data"]["status"]
+        if status in ("SUCCEEDED", "FAILED", "ABORTED", "TIMED-OUT"):
+            break
+    print("Apify run status:", status)
+    items = requests.get(f"{base}/datasets/{dataset}/items",
+                         params={"token": APIFY_TOKEN, "clean": "true"}, timeout=60).json()
+    return items if isinstance(items, list) else []
+
+
+def apify_people(company_urls, second_pass=False, budget=APIFY_DAILY_BUDGET_USD):
+    """Pass 1: senior people (CXO, Owner / Partner). Pass 2: founder-type job titles for the misses."""
+    if not APIFY_TOKEN or not company_urls or budget < 0.06:
         return []
+    max_people = int((budget - 0.02) / 0.004)             # $0.02 start + about $0.004 per person
     body = {
         "companies": company_urls,
         "companyBatchMode": "all_at_once",
-        "seniorityLevelIds": ["310", "320"],          # CXO, Owner / Partner
         "profileScraperMode": "Short ($4 per 1k)",
-        "maxItems": min(APIFY_MAX_PEOPLE, 2 * len(company_urls)),
+        "maxItems": max(5, min(max_people, 2 * len(company_urls), APIFY_MAX_PEOPLE)),
     }
-    base = "https://api.apify.com/v2"
+    if second_pass:
+        body["jobTitles"] = FOUNDER_TITLES
+    else:
+        body["seniorityLevelIds"] = ["310", "320"]        # CXO, Owner / Partner
     try:
-        run = requests.post(f"{base}/acts/{APIFY_ACTOR}/runs",
-                            params={"token": APIFY_TOKEN, "maxTotalChargeUsd": APIFY_COST_CAP_USD},
-                            json=body, timeout=60).json()["data"]
-        run_id, dataset = run["id"], run["defaultDatasetId"]
-        for _ in range(90):                               # wait up to ~15 minutes
-            time.sleep(10)
-            status = requests.get(f"{base}/actor-runs/{run_id}", params={"token": APIFY_TOKEN},
-                                  timeout=30).json()["data"]["status"]
-            if status in ("SUCCEEDED", "FAILED", "ABORTED", "TIMED-OUT"):
-                break
-        print("Apify run status:", status)
-        items = requests.get(f"{base}/datasets/{dataset}/items",
-                             params={"token": APIFY_TOKEN, "clean": "true"}, timeout=60).json()
-        return items if isinstance(items, list) else []
+        return apify_run(body, budget)
     except Exception as e:
         print("Apify lookup failed:", e)
         return []
 
 
+def clean_name(n):
+    n = re.sub(r"\(.*?\)|\[.*?\]", "", str(n or ""))          # "(Let's connect)" etc.
+    n = n.split(",")[0]                                          # ", MBA" / ", CPA"
+    n = re.sub(r"[^\w\s.'-]", "", n, flags=re.UNICODE)           # emojis and symbols
+    return re.sub(r"\s+", " ", n).strip()
+
+
 def person_info(item):
-    first = str(item.get("firstName") or "").strip()
-    last = str(item.get("lastName") or "").strip()
-    name = (first + " " + last).strip() or str(item.get("fullName") or item.get("name") or "").strip()
+    first = clean_name(item.get("firstName"))
+    last = clean_name(item.get("lastName"))
+    name = (first + " " + last).strip() or clean_name(item.get("fullName") or item.get("name"))
     url = item.get("linkedinUrl") or item.get("profileUrl") or item.get("linkedInUrl") or item.get("url") or ""
     title = str(item.get("headline") or "")
     comp_url, comp_name = "", ""
@@ -229,7 +255,13 @@ def main():
     print(f"New companies for today's queue: {len(todays)}")
 
     urls = sorted({l["company_url"] for l in todays if slug(l.get("company_url"))})
-    found = match_people(todays, apify_people(urls))
+    first_items = apify_people(urls, budget=APIFY_DAILY_BUDGET_USD * 0.6)
+    found = match_people(todays, first_items)
+    missing = [l for l in todays if l["company"] not in found and slug(l.get("company_url"))]
+    if missing:                                           # second try for companies with no match
+        more = match_people(missing, apify_people(sorted({l["company_url"] for l in missing}),
+                                                  second_pass=True, budget=APIFY_DAILY_BUDGET_USD * 0.4))
+        found.update(more)
     print(f"Decision makers found: {len(found)} of {len(todays)}")
 
     rows = []
