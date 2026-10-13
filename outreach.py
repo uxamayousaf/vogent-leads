@@ -102,7 +102,8 @@ def rank_key(l):
         newest = -dt.date.fromisoformat(str(l.get("posted"))[:10]).toordinal()
     except ValueError:
         newest = 0
-    return (size_known_small, WORK_ORDER.get(l.get("work_type"), 9),
+    benefits = 1 if l.get("us_benefits") else 0          # full US payroll benefits = harder to convert
+    return (size_known_small, WORK_ORDER.get(l.get("work_type"), 9), benefits,
             REGION_ORDER.get(l.get("region"), 9), ghl, newest)
 
 
