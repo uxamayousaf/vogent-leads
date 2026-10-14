@@ -312,8 +312,19 @@ def get_path(d, path, default=None):
     return default if d is None else d
 
 
+GENERIC_WORDS = set("""a an and the of for to in on at by with we us our you your i me my they it this that these
+there here who what when where why how very important short below above overview job role position title
+looking hiring seeking need needed help about company business team operations marketing sales growth
+digital assistant manager specialist expert support services service solutions systems group agency media
+labs studio partners consulting holdings llc inc ltd co founder owner ceo real estate remote full part time
+long term ongoing new local online virtual executive medical custom lead leads funnel automation ai seo
+summary description responsibilities requirements qualifications benefits compensation details project
+apply application proposal note please thank thanks hello hi welcome intro introduction background mission
+key what's we're you'll we've it's let's""".split())
+
+
 def client_name(desc):
-    """Only returns a name the job post itself states."""
+    """Only returns a name the job post itself states, and only if it looks like a real company name."""
     pats = [
         r"(?im)^\s*company\s*:\s*([A-Z][^\n]{1,50})$",
         r"(?m)^\s*About\s+([A-Z][\w&'.-]*(?:\s+[A-Z&][\w&'.-]*){0,4})\s*$",
@@ -328,7 +339,14 @@ def client_name(desc):
             first = name.split(" ")[0].lower()
             if first in NOT_A_NAME or len(name) < 3 or name.lower() in NOT_A_NAME:
                 continue
-            return name
+            tokens = [t.lower().strip("'’&.,") for t in name.split()]
+            distinctive = [t for t in tokens if t and t not in GENERIC_WORDS]
+            if not distinctive:
+                continue                                   # e.g. "Very Important We", "There", "Below"
+            confirmed = (p == pats[0] or p == pats[2] or
+                         len(re.findall(re.escape(name.split(" ")[0]), desc)) >= 2)
+            if confirmed:
+                return name
     return ""
 
 
@@ -369,6 +387,8 @@ def upwork_leads(today, start_rank):
         region = "USA" if country in ("USA", "United States") else ("Canada" if country == "Canada" else "")
         size = get_path(it, "buyer.company.profile.size")
         name = client_name(desc)
+        title = str(it.get("title") or "")
+        # Senior / Lead / Manager titles are allowed on Upwork (remote by nature)
         if not (desc and region and name) or commission_heavy(desc):
             continue                                       # named clients only, no commission-heavy posts
         if isinstance(size, (int, float)) and size > MAX_COMPANY_SIZE:
@@ -463,6 +483,8 @@ BAD_DOMAIN = ["example.com", "domain.com", "sentry", "wixpress", "godaddy", "squ
 HIRING_LOCAL = ["careers", "career", "jobs", "job", "hr", "hiring", "recruit", "talent", "people", "work"]
 GENERAL_LOCAL = ["hello", "hi", "info", "contact", "team", "office", "admin", "sales", "inquiries",
                  "enquiries", "connect", "mail", "general"]
+SKIP_LOCAL_WORDS = ["sales", "ventas", "vendor", "intl", "practice", "partner", "support", "service",
+                    "billing", "order", "shop", "store", "press", "media", "marketing", "accounts", "invoice"]
 LAST_RESORT_LOCAL = ["support", "help", "care", "service", "customerservice", "orders", "shop", "store"]
 DEPARTMENT_WORDS = ["marketing", "art", "design", "creative", "studio", "partners", "partnerships",
                     "business", "newbusiness", "growth", "ops", "operations", "finance", "booking",
@@ -511,16 +533,17 @@ def find_email(website):
             continue
         if not (dom.endswith(domain) or domain.endswith(dom)):
             continue                                            # only the company's own domain
+        head = re.split(r"[._-]", local)[0]
         if local in HIRING_LOCAL or any(local.startswith(h) for h in HIRING_LOCAL):
             kind, rank = "hiring", 1
-        elif local in GENERAL_LOCAL or local in DEPARTMENT_WORDS:
+        elif local in GENERAL_LOCAL and local not in ("sales", "admin"):
             kind, rank = "general", 2
-        elif local in LAST_RESORT_LOCAL:
-            kind, rank = "general", 4
-        elif re.fullmatch(r"[a-z]{2,15}(\.[a-z]{2,20})?", local):
+        elif any(w in local for w in SKIP_LOCAL_WORDS) or head in DEPARTMENT_WORDS or head in GENERAL_LOCAL:
+            continue                                            # sales@, ventas@, vendors@, support@, team.px@ ...
+        elif re.fullmatch(r"[a-z]{3,15}(\.[a-z]{2,20})?", local):
             kind, rank = "personal", 0
         else:
-            kind, rank = "general", 3
+            continue
         good.append((rank, e, kind))
     if not good:
         return "", ""
@@ -621,59 +644,26 @@ def main():
         print("Could not check earlier outreach, continuing:", reply[:200])
         new_keys = {norm(l["company"]) for l in ranked}
     fresh_ranked = [l for l in ranked if norm(l["company"]) in new_keys]
-    todays = fresh_ranked[:DAILY_LINKEDIN]
-    print(f"New companies for today's LinkedIn queue: {len(todays)}")
-
-    found = {}
-    for l in todays:                                      # free lookup: company page box, then web search
-        p = free_founder(l["company"], l.get("people"))
-        if p:
-            found[l["company"]] = p
-    print(f"Decision makers found: {len(found)} of {len(todays)}")
-
-    rows = []
-    for i, l in enumerate(todays, 1):
-        p = found.get(l["company"])
-        first = p["first"] if p else ""
-        rows.append({
-            "key": norm(l["company"]),
-            "date": today.strftime("%Y-%m-%d"),
-            "rank": i,
-            "channel": "LinkedIn",
-            "region": l["region"],
-            "company": l["company"],
-            "company_url": l.get("company_url", ""),
-            "size": l.get("size", "Unknown"),
-            "job_url": l["url"],
-            "title": l["title"],
-            "work_type": l.get("work_type", ""),
-            "dm_name": p["name"] if p else "Find founder ↗",
-            "dm_url": p["url"] if p else founder_search_url(l["company"]),
-            "dm_title": p["title"] if p else "",
-            "email": "",
-            "note": named_note(l.get("note", ""), first),
-            "followup": follow_up_dm(l, first),
-            "email_status": "",
-        })
-
-    # ----- Email queue: the next companies after the LinkedIn list -----
+    # ----- Smart split, strict rank order -----
+    # Each company, best first: confirmed size + good email found -> Email (until today's email limit),
+    # otherwise -> LinkedIn (until 20). So both channels reach the smallest companies first.
     cap = email_cap(today) if EMAIL_ENABLED else 0
-    emailed = 0
-    for l in [x for x in fresh_ranked[DAILY_LINKEDIN:] if x.get("size_min") is not None][:EMAIL_LOOKUP_MAX]:
-        if emailed >= cap:                    # email only goes to companies with a CONFIRMED size
+    rows, linkedin_n, emailed, found_n, looked = [], 0, 0, 0, 0
+    for l in fresh_ranked:
+        if linkedin_n >= DAILY_LINKEDIN and emailed >= cap:
             break
-        email, kind = find_email(l.get("website", ""))
-        if not email:
-            continue
+        email, kind = "", ""
+        if emailed < cap and l.get("size_min") is not None and looked < EMAIL_LOOKUP_MAX:
+            looked += 1
+            email, kind = find_email(l.get("website", ""))
+        if not email and linkedin_n >= DAILY_LINKEDIN:
+            continue                                      # LinkedIn is full and no email for this one
         p = free_founder(l["company"], l.get("people"))
-        first = p["first"] if (p and kind != "personal") else ""
-        subject, body1, body2 = build_email(l, email, kind, first)
-        emailed += 1
-        rows.append({
+        found_n += 1 if p else 0
+        base = {
             "key": norm(l["company"]),
             "date": today.strftime("%Y-%m-%d"),
-            "rank": DAILY_LINKEDIN + emailed,
-            "channel": "Email",
+            "rank": len(rows) + 1,
             "region": l["region"],
             "company": l["company"],
             "company_url": l.get("company_url", ""),
@@ -684,13 +674,23 @@ def main():
             "dm_name": p["name"] if p else "Find founder ↗",
             "dm_url": p["url"] if p else founder_search_url(l["company"]),
             "dm_title": p["title"] if p else "",
-            "email": email,
-            "note": body1,                     # email 1 (shown in the Connection Note column)
-            "followup": body2,                 # follow-up email (shown in the Follow-up DM column)
-            "email_status": "Queued",
-            "subject": subject,
-        })
-    print(f"Emails queued today: {emailed} (daily limit {cap})")
+        }
+        if email:
+            first = p["first"] if (p and kind != "personal") else ""
+            subject, body1, body2 = build_email(l, email, kind, first)
+            emailed += 1
+            rows.append({**base, "channel": "Email", "email": email,
+                         "note": body1,           # email 1 (shown in the Connection Note column)
+                         "followup": body2,       # follow-up email (shown in the Follow-up DM column)
+                         "email_status": "Queued", "subject": subject})
+        else:
+            first = p["first"] if p else ""
+            linkedin_n += 1
+            rows.append({**base, "channel": "LinkedIn", "email": "",
+                         "note": named_note(l.get("note", ""), first),
+                         "followup": follow_up_dm(l, first), "email_status": ""})
+    found = {r["company"]: 1 for r in rows if r["dm_name"] != "Find founder ↗"}
+    print(f"LinkedIn rows: {linkedin_n} | emails queued: {emailed} (limit {cap}) | decision makers found: {len(found)}")
 
     # ----- Upwork GHL leads with a named client -----
     up = upwork_leads(today, DAILY_LINKEDIN + emailed)
