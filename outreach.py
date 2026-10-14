@@ -22,18 +22,12 @@ MAX_COMPANY_SIZE = 200                   # 1 to 200 staff; 50 or fewer rank firs
 SMALL_COMPANY = 50
 WEEKDAYS_ONLY = True                     # Monday to Friday (Pakistan time)
 REGION_ORDER = {"USA": 1, "Canada": 2, "UK": 3}
-# Outreach role priority: lower number = contacted first, equal numbers = equal priority
-ROLE_RANK = {
-    "CRM Automation": 1,          # GoHighLevel or HubSpot
-    "Performance Marketing": 2,
-    "AI Automation": 3,
-    "SEO": 4,                     # US / UK clients only
-    "Customer Service": 5,        # CSR
-    "Bookkeeping": 6,
-    "RevOps": 7,
-    "Virtual Assistant": 8,
-}
-ROLES = list(ROLE_RANK)
+# Outreach roles. CRM (GHL / HubSpot) is always first. The others are re-ordered automatically
+# every day by how many small, junior companies posted them in the last 7 days (most first).
+FIXED_FIRST_ROLE = "CRM Automation"
+DATA_ROLES = ["Customer Service", "Bookkeeping", "Performance Marketing", "SEO"]   # default order
+ROLE_RANK = {FIXED_FIRST_ROLE: 1, **{r: i + 2 for i, r in enumerate(DATA_ROLES)}}
+ROLES = list(ROLE_RANK)                  # VA, AI Automation, RevOps: never contacted automatically
 ROLE_REGIONS = {"SEO": ["USA", "UK"]}    # roles limited to certain client regions
 GHL_ONLY_FOR_CRM = False                 # CRM Automation = GHL or HubSpot (or other CRM) jobs
 APIFY_ACTOR = "harvestapi~linkedin-company-employees"
@@ -64,10 +58,8 @@ EMAIL_START_DATE = "2026-10-13"          # warm-up: week 1 = 10 a day, week 2 = 
 EMAIL_LOOKUP_MAX = 45                    # companies checked for an email address each day
 SENDER_NAME = "Usama Yousaf"
 SENDER_TITLE = "Founder, Vogent Labs"
-ADDRESS_LINE = "Vogent Labs (SMC-Private) Limited, Block A, NESPAK, Lahore, Pakistan"
-ADDRESS_REGIONS = ["USA", "Canada"]       # postal address is legally required only for these
 LINKEDIN_URL = "linkedin.com/in/uxamayousaf"
-OPT_OUT = 'Not relevant? Reply "no" and I won\'t follow up.'
+LINKEDIN_IN_FIRST_EMAIL_AFTER_DAYS = 14   # first email gets the LinkedIn link once warm-up is done
 EMAIL_SPECIALISTS = {
     "CRM Automation": "GoHighLevel specialists",
     "Virtual Assistant": "remote support staff",
@@ -138,21 +130,25 @@ def eligible(l):
 
 def rank_key(l):
     size_min = l.get("size_min")
-    size_bucket = 2 if size_min is None else (0 if size_min <= SMALL_COMPANY else 1)
+    size_bucket = 3 if size_min is None else (0 if size_min <= 10 else (1 if size_min <= SMALL_COMPANY else 2))
     role_rank = ROLE_RANK.get(l.get("category"), 99)
     try:
         newest = -dt.date.fromisoformat(str(l.get("posted"))[:10]).toordinal()
     except ValueError:
         newest = 0
     benefits = 1 if l.get("us_benefits") else 0          # full US payroll benefits = harder to convert
-    return (role_rank, size_bucket, WORK_ORDER.get(l.get("work_type"), 9), benefits,
+    return (size_bucket, role_rank, WORK_ORDER.get(l.get("work_type"), 9), benefits,
             REGION_ORDER.get(l.get("region"), 9), newest)
 
 
 # ---------- 2. Find decision makers with Apify ----------
 def apify_run(body, cost_cap):
+    return apify_run_actor(APIFY_ACTOR, body, cost_cap)
+
+
+def apify_run_actor(actor, body, cost_cap):
     base = "https://api.apify.com/v2"
-    run = requests.post(f"{base}/acts/{APIFY_ACTOR}/runs",
+    run = requests.post(f"{base}/acts/{actor}/runs",
                         params={"token": APIFY_TOKEN, "maxTotalChargeUsd": round(cost_cap, 2)},
                         json=body, timeout=60).json()["data"]
     run_id, dataset = run["id"], run["defaultDatasetId"]
@@ -239,6 +235,178 @@ def match_people(targets, items):
     return best
 
 
+# ---------- 2b. Free founder lookup (no Apify, no LinkedIn login) ----------
+FOUNDER_WORDS = ["founder", "co-founder", "ceo", "chief executive", "owner", "president",
+                 "managing director", "principal", "partner"]
+
+
+def ddg_search(query):
+    """Public web search (DuckDuckGo). Returns [(url, title)]."""
+    from urllib.parse import parse_qs, unquote, urlparse
+    try:
+        r = requests.get("https://html.duckduckgo.com/html/", params={"q": query}, headers=UA, timeout=20)
+        out = []
+        for href, title in re.findall(r'class="result__a"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)</a>', r.text):
+            if "uddg=" in href:
+                href = unquote(parse_qs(urlparse(href).query).get("uddg", [""])[0])
+            out.append((href, re.sub(r"<[^>]+>", "", title).strip()))
+        return out
+    except Exception:
+        return []
+    finally:
+        time.sleep(2)
+
+
+def free_founder(company, people=None):
+    """1) the public 'Employees at' box on the company page, 2) a public web search."""
+    for name, url, title in (people or []):
+        if any(w in title.lower() for w in FOUNDER_WORDS):
+            return {"name": clean_name(name), "first": clean_name(name).split(" ")[0], "url": url, "title": title}
+    words = [w for w in re.findall(r"[a-z0-9]+", company.lower()) if len(w) > 2][:3]
+    for url, title in ddg_search(f'"{company}" founder OR CEO OR owner site:linkedin.com/in'):
+        if "linkedin.com/in/" not in url:
+            continue
+        t = title.lower()
+        if not any(w in t for w in FOUNDER_WORDS) or not all(w in t for w in words[:2]):
+            continue                                       # must be a founder-type title AT this company
+        parts = [x.strip() for x in re.split(r"\s[-|–]\s", title)]
+        name = clean_name(parts[0])
+        if 2 <= len(name.split()) <= 4:
+            return {"name": name, "first": name.split(" ")[0], "url": url.split("?")[0],
+                    "title": parts[1] if len(parts) > 1 else ""}
+    return None
+
+
+def linkedin_company_url(company):
+    for url, title in ddg_search(f'"{company}" site:linkedin.com/company'):
+        if "linkedin.com/company/" in url and norm(company)[:8] in norm(title):
+            return url.split("?")[0]
+    return ""
+
+
+# ---------- Upwork GHL leads (Apify), named clients only ----------
+UPWORK_ENABLED = True
+UPWORK_ACTOR = "flash_mage~upwork"
+UPWORK_QUERIES = ["GoHighLevel", "HighLevel", "GHL"]
+UPWORK_LIMIT = 40                        # newest jobs checked per day (about $0.12)
+UPWORK_COST_CAP_USD = 0.20
+GHL_SKILLS = [("funnels", ["funnel"]), ("workflows", ["workflow", "automation"]), ("pipelines", ["pipeline"]),
+              ("SMS follow-ups", ["sms", "text follow"]), ("email campaigns", ["email marketing", "email campaign",
+              "email sequence", "newsletter"]), ("calendars", ["calendar", "appointment"]),
+              ("landing pages", ["landing page"]), ("integrations", ["zapier", "make.com", "webhook", "api"]),
+              ("A2P setup", ["a2p", "10dlc"]), ("lead follow-up", ["lead follow", "follow-up", "nurture"]),
+              ("CRM management", ["crm"])]
+NOT_A_NAME = {"growth", "digital", "email", "content", "performance", "social", "affiliate", "b2b", "paid",
+              "inbound", "outbound", "real", "full", "part", "senior", "junior", "new", "local", "online", "sales",
+              "lead", "funnel", "automation", "marketing", "seo", "ai", "virtual", "executive", "medical", "custom",
+              "we", "i", "our", "this", "the", "you", "your", "gohighlevel", "highlevel", "ghl", "upwork",
+              "meta", "google", "facebook", "zapier", "make", "hubspot", "crm", "looking", "about", "company",
+              "seeking", "hiring", "remote", "ideal", "responsibilities", "requirements", "us", "it", "they"}
+
+
+def get_path(d, path, default=None):
+    for k in path.split("."):
+        if not isinstance(d, dict):
+            return default
+        d = d.get(k)
+    return default if d is None else d
+
+
+def client_name(desc):
+    """Only returns a name the job post itself states."""
+    pats = [
+        r"(?im)^\s*company\s*:\s*([A-Z][^\n]{1,50})$",
+        r"(?m)^\s*About\s+([A-Z][\w&'.-]*(?:\s+[A-Z&][\w&'.-]*){0,4})\s*$",
+        r"\b([A-Z][\w&'.-]*(?:\s+(?:[A-Z&][\w&'.-]*|of|and)){0,4}\s+(?:LLC|Inc\.?|Ltd\.?|Co\.|Group|Solutions|"
+        r"Systems|Agency|Media|Marketing(?: AI)?|Realty|Remodeling|Labs|Wellness|Partners|Holdings|Consulting|Studio))\b",
+        r"(?m)(?:^|[.!?]\s+)([A-Z][\w&'.-]*(?:\s+(?:[A-Z&][\w&'.-]*|of|and)){0,4})\s+(?:is|are|seeks|helps|"
+        r"connects|has been|specializes|was founded)\b",
+    ]
+    for p in pats:
+        for m in re.finditer(p, desc):
+            name = re.sub(r"\s+", " ", m.group(1)).strip(" .,:")
+            first = name.split(" ")[0].lower()
+            if first in NOT_A_NAME or len(name) < 3 or name.lower() in NOT_A_NAME:
+                continue
+            return name
+    return ""
+
+
+def proposal_keyword(desc):
+    """Many posts say 'Start your proposal with the word X'. We put X first, as asked."""
+    m = re.search(r"(?i)(?:start|begin)\s+(?:your|the)\s+(?:proposal|application|cover letter|response)[^.\n]{0,30}?"
+                  r"(?:with|using)\s+(?:(?:the\s+)?(?:word|words|phrase)s?)?\s*:?\s*([\s\S]{0,70})", desc)
+    if not m:
+        return ""
+    tail = m.group(1)
+    q = re.search(r"[\"“'‘]\s*([^\"”'’\n]{2,50}?)\s*[.,!]?\s*[\"”'’]", tail)
+    if q:
+        return q.group(1).strip(" .,")
+    caps = re.match(r"\s*([A-Z][A-Z0-9' ]{1,40}[A-Z0-9])\b", tail)
+    return caps.group(1).strip() if caps else ""
+
+
+def commission_heavy(desc):
+    d = desc.lower()
+    return "commission" in d and bool(re.search(r"commission[- ]only|base pay|\$\s?[1-9](?:\.\d+)?\s*/\s*h(?:ou)?r|"
+                                                  r"\$\s?\d{2,3}\s*/\s*month base", d))
+
+
+def upwork_leads(today, start_rank):
+    if not (UPWORK_ENABLED and APIFY_TOKEN):
+        return []
+    body = {"query": UPWORK_QUERIES, "limit": UPWORK_LIMIT, "sort": "newest", "hourly": True, "fixed": False,
+            "project_length": ["ongoing"], "location_subregions": ["Northern America"]}
+    try:
+        items = apify_run_actor(UPWORK_ACTOR, body, UPWORK_COST_CAP_USD)
+    except Exception as e:
+        print("Upwork lookup failed:", e)
+        return []
+    leads, seen = [], set()
+    for it in items:
+        desc = str(get_path(it, "data.opening.description", "") or "")
+        country = str(get_path(it, "buyer.location.country", "") or "")
+        region = "USA" if country in ("USA", "United States") else ("Canada" if country == "Canada" else "")
+        size = get_path(it, "buyer.company.profile.size")
+        name = client_name(desc)
+        if not (desc and region and name) or commission_heavy(desc):
+            continue                                       # named clients only, no commission-heavy posts
+        if isinstance(size, (int, float)) and size > MAX_COMPANY_SIZE:
+            continue
+        if norm(name) in seen:
+            continue
+        seen.add(norm(name))
+        d = desc.lower()
+        skills = [n for n, words in GHL_SKILLS if any(w in d for w in words)][:3]
+        leads.append({"company": name, "region": region, "size": str(int(size)) if isinstance(size, (int, float)) else "Unknown",
+                      "title": str(it.get("title") or "GoHighLevel role"), "url": str(it.get("link") or ""),
+                      "skills": skills, "keyword": proposal_keyword(desc), "desc": desc})
+    print(f"Upwork: {len(items)} GHL jobs checked, {len(leads)} with a named client")
+    return leads
+
+
+def upwork_proposal(lead, first):
+    skills = lead["skills"] or ["your GoHighLevel setup"]
+    s_txt = skills[0] if len(skills) == 1 else ", ".join(skills[:-1]) + " and " + skills[-1]
+    top = f"{lead['keyword']}\n\n" if lead["keyword"] else ""
+    hi = f"Hi {first}," if first else "Hi there,"
+    return (f"{top}{hi}\n\nYou need someone to own {s_txt} in GoHighLevel long term, and that is exactly the "
+            f"work our GHL specialists do every day.\n\nI'm Usama, founder of Vogent Labs. We place dedicated "
+            f"GoHighLevel specialists who join your team in days, not weeks, and stay with you long term, at a much "
+            f"lower cost than a local hire. We handle everything on our side, so it stays hassle free for you.\n\n"
+            f"Quick question so I can match the right person: what is the one thing this hire must get right in the "
+            f"first 30 days?\n\nUsama")
+
+
+def upwork_note(lead, first):
+    skills = lead["skills"][:2]
+    s_txt = " and ".join(skills) if skills else "GoHighLevel"
+    hi = f"Hi {first}," if first else "Hi,"
+    note = (f"{hi} saw {lead['company']} is looking for GoHighLevel help with {s_txt}. How is the search going "
+            f"so far? Would be glad to connect.")
+    return note if len(note) <= 300 else note[:297].rsplit(" ", 1)[0] + "..."
+
+
 # ---------- 3. Messages ----------
 def specialists(lead, table):
     if lead.get("category") == "CRM Automation":
@@ -252,7 +420,11 @@ def specialists(lead, table):
 
 
 def article(role):
+    first = role.split(" ")[0] if role else ""
+    if first.isupper() and len(first) > 1:                 # acronyms: "an SEO", "an SDR", "a CRM"
+        return ("an " if first[0] in "AEFHILMNORSX" else "a ") + role
     return ("an " if role[:1].lower() in "aeiou" else "a ") + role
+
 
 
 def follow_up_dm(lead, first):
@@ -397,15 +569,20 @@ def build_email(lead, email, kind, first=""):
     else:
         line3 = ("What matters most for this hire? Share the top one or two things and I'll tell you "
                  "within a day if we have someone who fits.")
-    addr = f"\n{ADDRESS_LINE}" if lead.get("region") in ADDRESS_REGIONS else ""
-    sign = f"{SENDER_NAME}\n{SENDER_TITLE}{addr}\n\n{OPT_OUT}"
-    body1 = f"{hi}\n\n{line1}\n\n{line2}\n\n{line3}\n\n{sign}"
+    sign = f"{SENDER_NAME}\n{SENDER_TITLE}"          # clean signature: name and title only
+    sign_li = f"{sign}\n{LINKEDIN_URL}"
+    try:
+        warm = (dt.datetime.now(PKT).date() - dt.date.fromisoformat(EMAIL_START_DATE)).days \
+            >= LINKEDIN_IN_FIRST_EMAIL_AFTER_DAYS
+    except ValueError:
+        warm = False
+    body1 = f"{hi}\n\n{line1}\n\n{line2}\n\n{line3}\n\n{sign_li if warm else sign}"
 
     top = skills[0] if skills else "day to day"
     body2 = (f"{hi}\n\nA quick follow-up on the {role_line} role. If time or budget is what's holding the hire "
              f"back, a remote specialist can cover the same {top} work at a much lower cost. Happy to answer "
              f"any questions, or I'll leave it here if you've got it covered.\n\n"
-             f"{SENDER_NAME}\n{SENDER_TITLE}\n{LINKEDIN_URL}{addr}\n\n{OPT_OUT}")
+             f"{sign_li}")
     return subject, body1, body2
 
 
@@ -415,6 +592,16 @@ def main():
     if WEEKDAYS_ONLY and today.weekday() >= 5:
         print("Weekend: no outreach queue today.")
         return
+
+    # Role order: CRM first, the rest by last 7 days of small, junior companies (most first)
+    try:
+        stats = json.loads(post({"action": "role_stats", "days": 7})).get("counts", {})
+        order = sorted(DATA_ROLES, key=lambda r: -int(stats.get(r, 0)))
+        ROLE_RANK.clear()
+        ROLE_RANK.update({FIXED_FIRST_ROLE: 1, **{r: i + 2 for i, r in enumerate(order)}})
+        print("Role order today:", [FIXED_FIRST_ROLE] + order, stats)
+    except Exception as e:
+        print("Using default role order:", e)
 
     leads = [l for l in load_candidates() if eligible(l)]
     best_per_company = {}
@@ -437,14 +624,11 @@ def main():
     todays = fresh_ranked[:DAILY_LINKEDIN]
     print(f"New companies for today's LinkedIn queue: {len(todays)}")
 
-    urls = sorted({l["company_url"] for l in todays if slug(l.get("company_url"))})
-    first_items = apify_people(urls, budget=APIFY_DAILY_BUDGET_USD * 0.6)
-    found = match_people(todays, first_items)
-    missing = [l for l in todays if l["company"] not in found and slug(l.get("company_url"))]
-    if missing:                                           # second try for companies with no match
-        more = match_people(missing, apify_people(sorted({l["company_url"] for l in missing}),
-                                                  second_pass=True, budget=APIFY_DAILY_BUDGET_USD * 0.4))
-        found.update(more)
+    found = {}
+    for l in todays:                                      # free lookup: company page box, then web search
+        p = free_founder(l["company"], l.get("people"))
+        if p:
+            found[l["company"]] = p
     print(f"Decision makers found: {len(found)} of {len(todays)}")
 
     rows = []
@@ -475,13 +659,15 @@ def main():
     # ----- Email queue: the next companies after the LinkedIn list -----
     cap = email_cap(today) if EMAIL_ENABLED else 0
     emailed = 0
-    for l in fresh_ranked[DAILY_LINKEDIN:DAILY_LINKEDIN + EMAIL_LOOKUP_MAX]:
-        if emailed >= cap:
+    for l in [x for x in fresh_ranked[DAILY_LINKEDIN:] if x.get("size_min") is not None][:EMAIL_LOOKUP_MAX]:
+        if emailed >= cap:                    # email only goes to companies with a CONFIRMED size
             break
         email, kind = find_email(l.get("website", ""))
         if not email:
             continue
-        subject, body1, body2 = build_email(l, email, kind)
+        p = free_founder(l["company"], l.get("people"))
+        first = p["first"] if (p and kind != "personal") else ""
+        subject, body1, body2 = build_email(l, email, kind, first)
         emailed += 1
         rows.append({
             "key": norm(l["company"]),
@@ -495,9 +681,9 @@ def main():
             "job_url": l["url"],
             "title": l["title"],
             "work_type": l.get("work_type", ""),
-            "dm_name": "Find founder ↗",
-            "dm_url": founder_search_url(l["company"]),
-            "dm_title": "",
+            "dm_name": p["name"] if p else "Find founder ↗",
+            "dm_url": p["url"] if p else founder_search_url(l["company"]),
+            "dm_title": p["title"] if p else "",
             "email": email,
             "note": body1,                     # email 1 (shown in the Connection Note column)
             "followup": body2,                 # follow-up email (shown in the Follow-up DM column)
@@ -505,6 +691,39 @@ def main():
             "subject": subject,
         })
     print(f"Emails queued today: {emailed} (daily limit {cap})")
+
+    # ----- Upwork GHL leads with a named client -----
+    up = upwork_leads(today, DAILY_LINKEDIN + emailed)
+    if up:
+        reply = post({"action": "outreach_check", "companies": [norm(u["company"]) for u in up]})
+        try:
+            new_up = set(json.loads(reply).get("new", []))
+        except Exception:
+            new_up = {norm(u["company"]) for u in up}
+        queued_keys = {r["key"] for r in rows}
+        for u in [u for u in up if norm(u["company"]) in new_up and norm(u["company"]) not in queued_keys]:
+            p = free_founder(u["company"])
+            first = p["first"] if p else ""
+            rows.append({
+                "key": norm(u["company"]),
+                "date": today.strftime("%Y-%m-%d"),
+                "rank": len(rows) + 1,
+                "channel": "Upwork",
+                "region": u["region"],
+                "company": u["company"],
+                "company_url": linkedin_company_url(u["company"]),
+                "size": u["size"],
+                "job_url": u["url"],
+                "title": u["title"],
+                "work_type": "Remote",
+                "dm_name": p["name"] if p else "Find founder ↗",
+                "dm_url": p["url"] if p else founder_search_url(u["company"]),
+                "dm_title": p["title"] if p else "",
+                "email": "",
+                "note": upwork_note(u, first),          # LinkedIn note (Connection Note column)
+                "followup": upwork_proposal(u, first),  # Upwork proposal draft (Follow-up DM column)
+                "email_status": "",
+            })
 
     print("Sheet response:", post({"action": "outreach_add", "rows": rows,
                                    "eligible": len(ranked), "found": len(found),
