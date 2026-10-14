@@ -34,19 +34,8 @@ REGIONS = {
     "USA / Canada": {"enabled": True, "rank": 1, "scale": 1.0, "locations": [
         ("United States", "USA"), ("Canada", "Canada"),
     ]},
-    "UK / Europe / EMEA": {"enabled": True, "rank": 2, "scale": 0.6, "locations": [
-        ("United Kingdom", "UK"), ("European Union", "Europe"),
-        ("Switzerland", "Switzerland"), ("South Africa", "South Africa"),
-    ]},
-    "Gulf": {"enabled": True, "rank": 3, "scale": 0.5, "locations": [
-        ("United Arab Emirates", "UAE"), ("Saudi Arabia", "Saudi Arabia"), ("Qatar", "Qatar"),
-        ("Kuwait", "Kuwait"), ("Bahrain", "Bahrain"), ("Oman", "Oman"),
-    ]},
-    "Australia / NZ": {"enabled": True, "rank": 4, "scale": 0.6, "locations": [
-        ("Australia", "Australia"), ("New Zealand", "New Zealand"),
-    ]},
-    "Asia (English)": {"enabled": True, "rank": 5, "scale": 0.5, "locations": [
-        ("Singapore", "Singapore"), ("Malaysia", "Malaysia"), ("Hong Kong", "Hong Kong"),
+    "UK": {"enabled": True, "rank": 2, "scale": 0.8, "locations": [
+        ("United Kingdom", "UK"),
     ]},
 }
 
@@ -66,7 +55,7 @@ CATEGORIES = {
         "must_mention": GHL_TERMS + ["hubspot", "zoho crm", "keap", "activecampaign", "pipedrive"],
     },
     "AI Automation": {
-        "enabled": True, "deep_results": 80, "normal_results": 40,
+        "enabled": False, "deep_results": 80, "normal_results": 40,
         "deep_searches": ["AI Automation Specialist", "n8n", "Make.com"],
         "searches": [
             "Automation Engineer", "Zapier Expert", "AI Agent Developer",
@@ -79,7 +68,7 @@ CATEGORIES = {
         ],
     },
     "RevOps": {
-        "enabled": True, "deep_results": 80, "normal_results": 40,
+        "enabled": False, "deep_results": 80, "normal_results": 40,
         "deep_searches": ["Revenue Operations", "RevOps"],
         "searches": [
             "RevOps Manager", "RevOps Specialist", "Revenue Operations Analyst",
@@ -93,7 +82,7 @@ CATEGORIES = {
     "SEO": {
         # US / UK clients only, so it is searched in those two region groups
         "enabled": True, "deep_results": 80, "normal_results": 40,
-        "regions": ["USA / Canada", "UK / Europe / EMEA"],
+        "regions": ["USA / Canada", "UK"],
         "deep_searches": ["SEO Specialist", "SEO Manager"],
         "searches": [
             "SEO Analyst", "SEO Strategist", "Technical SEO", "Local SEO", "SEO Executive",
@@ -363,6 +352,27 @@ def strict_agency(company, industry, desc):
             or any(p in d for p in STRICT_AGENCY_PHRASES))
 
 
+# Senior roles are skipped everywhere (small companies rarely outsource them)
+SENIOR_RE = re.compile(r"\b(senior|sr|lead|head|director|vp|vice president|chief|principal|staff|manager)\b", re.I)
+
+
+def is_senior(title):
+    return bool(SENIOR_RE.search(title))
+
+
+def title_not_english(title):
+    """Catches titles like 'Intégrateur(trice) web' or 'German and English Speaking'."""
+    if needs_other_language(title) or LANG_RE.search(title):
+        return True
+    words = re.findall(r"[^\W\d_]+", title)
+    if len(words) >= 3 and re.search(r"[À-ÿ]", title):
+        try:
+            return detect(title) != "en"
+        except Exception:
+            return False
+    return False
+
+
 def location_locked(title, location, desc):
     blob = title + " | " + location + " | " + desc
     return any(p.search(blob) for p in LOCATION_LOCK_PATTERNS)
@@ -413,7 +423,11 @@ def connection_note(company, role, category, skills, work):
     if category == "Virtual Assistant":
         role = "assistant"           # keep "VA" wording out of outreach copy
     role = role if len(role) <= 45 else role[:45].rsplit(" ", 1)[0]
-    a_role = ("an " if role[:1].lower() in "aeiou" else "a ") + role
+    first_word = role.split(" ")[0] if role else ""
+    if first_word.isupper() and len(first_word) > 1:          # acronyms: "an SEO", "a CRM"
+        a_role = ("an " if first_word[0] in "AEFHILMNORSX" else "a ") + role
+    else:
+        a_role = ("an " if role[:1].lower() in "aeiou" else "a ") + role
     local_angle = work in ("On-site", "Hybrid")
     for n in (3, 2, 1, 0):
         sk = skills[:n]
@@ -465,6 +479,21 @@ def parse_size(raw):
     return label, nums[0]
 
 
+PEOPLE_CACHE = {}
+
+
+def company_people(html):
+    """People shown on the public company page: [(name, profile url, title)]."""
+    people = []
+    for card in re.findall(r'<a[^>]+href="(https://[a-z]{2,3}\.linkedin\.com/in/[^"?]+)[^"]*"[^>]*>([\s\S]{0,1500}?)</a>', html):
+        url, inner = card
+        name = re.search(r'base-main-card__title[^>]*>\s*([^<]+?)\s*<', inner)
+        title = re.search(r'base-main-card__subtitle[^>]*>\s*([^<]+?)\s*<', inner)
+        if name:
+            people.append((name.group(1).strip(), url.split("?")[0], title.group(1).strip() if title else ""))
+    return people[:12]
+
+
 def company_size(company_url, row):
     """Returns (size label, smallest headcount or None, industry, website) from the company page."""
     url = company_url.split("?")[0].rstrip("/")
@@ -483,6 +512,7 @@ def company_size(company_url, row):
             ind = re.search(r"Industry\s+(.{3,60}?)\s+(?:Company size|Headquarters|Type|Founded)", plain)
             label, mn = parse_size(m.group(1)) if m else ("Unknown", None)
             result = (label, mn, ind.group(1).strip() if ind else "", company_website(r.text))
+            PEOPLE_CACHE[url] = company_people(r.text)
     except Exception:
         pass
     SIZE_CACHE[url] = result
@@ -571,6 +601,7 @@ def search(term, n, location, remote=False):
 def main():
     found = {}
     checked, ex_agency, ex_big, ex_lang, ex_incomplete, ex_loc = set(), set(), set(), set(), set(), set()
+    companies_today = set()
     ran = []
 
     for region_name, rcfg in REGIONS.items():
@@ -586,8 +617,8 @@ def main():
             regexes = [build_regex(k) for k in cfg["must_mention"]]
             deep_n = max(10, int(cfg["deep_results"] * rcfg["scale"]))
             normal_n = max(10, int(cfg["normal_results"] * rcfg["scale"]))
-            terms = [(t, deep_n) for t in cfg["deep_searches"]] + \
-                    [(t, normal_n) for t in cfg["searches"]]
+            terms = [(t, deep_n) for t in cfg["deep_searches"] if not is_senior(t)] + \
+                    [(t, normal_n) for t in cfg["searches"] if not is_senior(t)]   # no "Manager" searches
 
             for location, short in rcfg["locations"]:
                 for term, n in terms:
@@ -612,9 +643,14 @@ def main():
                         desc = text(row.get("description"))
                         industry = text(row.get("company_industry"))
 
+                        if is_senior(title):
+                            continue                                     # no Senior / Lead / Manager roles
                         if not any(r.search(title + " " + desc) for r in regexes):
                             continue
-                        if not is_english(desc) or needs_other_language(desc):
+                        co_key = re.sub(r"\W+", "", company.lower())
+                        if co_key in companies_today:
+                            continue                                     # one row per company per day
+                        if title_not_english(title) or not is_english(desc) or needs_other_language(desc):
                             ex_lang.add(key)
                             continue
                         if location_locked(title, text(row.get("location")), desc):
@@ -639,6 +675,7 @@ def main():
                             wtype = badge
                         elif badge in ("On-site", "Hybrid") and wtype == "Remote" and "remote" not in title.lower():
                             wtype = badge                                # badge beats a loose "remote" mention
+                        companies_today.add(co_key)
                         found[key] = {
                             "id": key,
                             "posted": posted,
@@ -663,6 +700,7 @@ def main():
                             "direct": not strict_agency(company, page_industry or industry, desc),
                             "us_benefits": us_benefits(desc),
                             "website": website,
+                            "people": PEOPLE_CACHE.get(company_url.rstrip("/"), []),
                         }
 
     if not ran:
