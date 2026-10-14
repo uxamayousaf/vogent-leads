@@ -1,8 +1,7 @@
 name: Find Leads
 
 on:
-  schedule:
-    - cron: "7 1 * * *"    # 6:07 AM Pakistan time daily, one run, list ready before 11 AM
+  # Started every morning by the Google Sheet (exact time, see startDailyRun in Apps Script)
   workflow_dispatch:        # adds a "Run workflow" button for manual runs
 
 jobs:
