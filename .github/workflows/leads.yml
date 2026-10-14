@@ -14,9 +14,9 @@ jobs:
       fail-fast: false
       max-parallel: 20
       matrix:
-        category: ["CRM Automation", "AI Automation", "SEO", "RevOps", "Bookkeeping",
-                   "Performance Marketing", "Virtual Assistant", "Customer Service"]
-        region: ["USA / Canada", "UK / Europe / EMEA", "Gulf", "Australia / NZ", "Asia (English)"]
+        category: ["CRM Automation", "SEO", "Performance Marketing", "Customer Service",
+                   "Bookkeeping", "Virtual Assistant"]
+        region: ["USA / Canada", "UK"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
