@@ -173,7 +173,7 @@ AGENCY_BLOCKLIST = [
 ]
 AGENCY_NAME_WORDS = [
     "staffing", "recruit", "talent", "placement", "workforce", "personnel",
-    "headhunt", "executive search",
+    "headhunt", "executive search", "4rec", "recruitment",
 ]
 AGENCY_PHRASES = [
     "our client", "on behalf of our client", "on behalf of a client",
@@ -483,15 +483,19 @@ PEOPLE_CACHE = {}
 
 
 def company_people(html):
-    """People shown on the public company page: [(name, profile url, title)]."""
+    """People shown on the public company page: [(name, profile url, title)].
+    Each person card on LinkedIn's public page is a list item with a profile link, a name and a title."""
     people = []
-    for card in re.findall(r'<a[^>]+href="(https://[a-z]{2,3}\.linkedin\.com/in/[^"?]+)[^"]*"[^>]*>([\s\S]{0,1500}?)</a>', html):
-        url, inner = card
-        name = re.search(r'base-main-card__title[^>]*>\s*([^<]+?)\s*<', inner)
-        title = re.search(r'base-main-card__subtitle[^>]*>\s*([^<]+?)\s*<', inner)
-        if name:
-            people.append((name.group(1).strip(), url.split("?")[0], title.group(1).strip() if title else ""))
-    return people[:12]
+    for card in re.split(r"<li\b", html):
+        url = re.search(r'href="(https://[a-z]{2,3}\.linkedin\.com/in/[^"?]+)', card)
+        name = re.search(r'base-main-card__title[^>]*>\s*([^<]+?)\s*<', card) or \
+            re.search(r'<h3[^>]*>\s*([^<]{3,60}?)\s*</h3>', card)
+        title = re.search(r'base-main-card__subtitle[^>]*>\s*([^<]+?)\s*<', card) or \
+            re.search(r'<h4[^>]*>\s*([^<]{2,120}?)\s*</h4>', card)
+        if url and name:
+            people.append((re.sub(r"\s+", " ", name.group(1)).strip(), url.group(1),
+                           re.sub(r"\s+", " ", title.group(1)).strip() if title else ""))
+    return people[:15]
 
 
 def company_size(company_url, row):
