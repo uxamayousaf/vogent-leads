@@ -143,6 +143,44 @@ CATEGORIES = {
             "leasing assistant", "leasing coordinator", "listing coordinator",
         ],
     },
+    "Lead Generation": {
+        "enabled": True, "deep_results": 80, "normal_results": 40,
+        "deep_searches": ["Appointment Setter", "Lead Generation Specialist"],
+        "searches": ["Cold Caller", "Lead Generation Assistant", "Outbound Caller", "Prospecting Specialist"],
+        "must_mention": ["appointment setting", "appointment setter", "lead generation", "cold calling",
+                         "cold call", "outbound calls", "prospecting", "booking appointments", "set appointments"],
+    },
+    "Social Media": {
+        "enabled": True, "deep_results": 80, "normal_results": 40,
+        "deep_searches": ["Social Media Coordinator", "Social Media Specialist"],
+        "searches": ["Social Media Assistant", "Social Media Content Creator", "Community Coordinator"],
+        "must_mention": ["social media", "instagram", "tiktok", "facebook", "content calendar", "community management"],
+    },
+    "Content Writing": {
+        "enabled": True, "deep_results": 80, "normal_results": 40,
+        "deep_searches": ["Content Writer", "Copywriter"],
+        "searches": ["Blog Writer", "SEO Writer", "Content Specialist", "Ghostwriter"],
+        "must_mention": ["content writing", "copywriting", "blog", "articles", "copy", "writing", "editorial"],
+    },
+    "Email Marketing": {
+        "enabled": True, "deep_results": 60, "normal_results": 30,
+        "deep_searches": ["Email Marketing Specialist"],
+        "searches": ["Email Marketing Coordinator", "Email Marketing Assistant", "Klaviyo Specialist"],
+        "must_mention": ["email marketing", "klaviyo", "mailchimp", "email campaigns", "newsletter", "email automation"],
+    },
+    "Design & Video": {
+        "enabled": True, "deep_results": 80, "normal_results": 40,
+        "deep_searches": ["Graphic Designer", "Video Editor"],
+        "searches": ["Junior Graphic Designer", "Canva Designer", "Motion Graphics Designer", "Content Designer"],
+        "must_mention": ["graphic design", "canva", "photoshop", "illustrator", "adobe", "video editing",
+                         "premiere", "after effects", "capcut", "final cut", "figma"],
+    },
+    "Website Support": {
+        "enabled": True, "deep_results": 60, "normal_results": 30,
+        "deep_searches": ["WordPress Developer", "Shopify Specialist"],
+        "searches": ["Webflow Developer", "Website Coordinator", "Website Assistant", "Shopify Developer"],
+        "must_mention": ["wordpress", "shopify", "webflow", "elementor", "squarespace", "wix", "website updates"],
+    },
     "Customer Service": {
         "enabled": True, "deep_results": 80, "normal_results": 30,
         "deep_searches": ["Customer Service Representative", "Customer Support Specialist"],
@@ -207,6 +245,13 @@ PLUS_WORDS = ["plus", "preferred", "nice to have", "bonus", "advantage", "asset"
 # (name shown, words to look for in the job description)
 SKILLS = [
     ("GHL", ["gohighlevel", "go high level", "highlevel", "ghl"]),
+    ("appointment setting", ["appointment setting", "booking appointments", "set appointments"]),
+    ("cold calling", ["cold calling", "cold call", "outbound calls"]), ("Instagram", ["instagram"]),
+    ("TikTok", ["tiktok"]), ("content calendars", ["content calendar"]), ("copywriting", ["copywriting"]),
+    ("blog posts", ["blog"]), ("Klaviyo", ["klaviyo"]), ("Mailchimp", ["mailchimp"]), ("Canva", ["canva"]),
+    ("Photoshop", ["photoshop"]), ("Illustrator", ["illustrator"]), ("Premiere Pro", ["premiere"]),
+    ("After Effects", ["after effects"]), ("CapCut", ["capcut"]), ("Figma", ["figma"]),
+    ("Webflow", ["webflow"]), ("Elementor", ["elementor"]),
     ("HubSpot", ["hubspot"]), ("Salesforce", ["salesforce"]), ("Zoho", ["zoho"]),
     ("Keap", ["keap", "infusionsoft"]), ("ActiveCampaign", ["activecampaign"]),
     ("Pipedrive", ["pipedrive"]), ("Zapier", ["zapier"]), ("Make", ["make.com", "integromat"]),
@@ -261,6 +306,19 @@ LOCATION_LOCK_PATTERNS = [
     re.compile(r"\bcandidates?\s+(?:must|need to|should)\s+(?:be\s+)?(?:located|based|residing)\s+in\b", re.I),
 ]
 
+# Only CLEAR office requirements count (not "on-site training" or "in-person retreat")
+STRONG_ONSITE = ["on-site role", "onsite role", "on-site position", "onsite position", "fully on-site",
+                 "fully onsite", "100% on-site", "100% onsite", "in-office role", "in office role",
+                 "in-office position", "must work on-site", "must work onsite", "must be in the office",
+                 "must work from our office", "work from our office", "report to our office", "on-site in ",
+                 "onsite in ", "days a week in the office", "days a week in office", "days per week in office",
+                 "days in the office", "this is an in-person", "in-person role", "in-person position",
+                 "must be able to commute", "must reside within", "not a remote", "no remote"]
+STRONG_ONSITE_RE = re.compile(r"\b(?:on[- ]?site|in[- ]office|in[- ]person)\b[^.]{0,60}\b(?:role|position|job|opportunity)\b"
+                              r"|\b(?:role|position|job) is (?:fully |100% )?(?:on[- ]?site|in[- ]office|in[- ]person)\b", re.I)
+STRONG_HYBRID = ["hybrid role", "hybrid position", "hybrid schedule", "hybrid work", "this is a hybrid"]
+STRONG_REMOTE = ["fully remote", "100% remote", "remote position", "remote role", "work from anywhere",
+                 "remote-first", "this is a remote", "remote opportunity", "work remotely"]
 ONSITE_PHRASES = [
     "on-site", "onsite", "on site", "in office", "in-office", "in person",
     "in-person", "must be able to commute", "must reside within",
@@ -396,6 +454,32 @@ def location_locked(title, location, desc):
 
 REMOTE_WORDS = ["remote", "work from home", "work-from-home", "wfh", "work from anywhere",
                 "fully distributed", "distributed team", "telecommute", "telecommuting"]
+
+
+def decide_work(row, title, desc, tags, remote_pass=False):
+    """LinkedIn's own Remote / Hybrid / On-site tags first, clear wording in the post second.
+    If they disagree, the job is kept as 'Remote (check)' so no good lead is lost."""
+    d = (title + " " + desc).lower()
+    on = any(p in d for p in STRONG_ONSITE) or bool(STRONG_ONSITE_RE.search(d))
+    hy = any(p in d for p in STRONG_HYBRID)
+    rem = any(p in d for p in STRONG_REMOTE) or "remote" in (text(row.get("location")) + " " + title).lower()
+    tagged_remote = "Remote" in tags or remote_pass or str(row.get("is_remote")).lower() == "true"
+    tagged_office = "On-site" in tags or "Hybrid" in tags
+    if tagged_remote and not tagged_office:
+        return "Remote (check)" if on else "Remote"
+    if tagged_office:
+        if rem:
+            return "Remote (check)"
+        return "On-site" if "On-site" in tags else "Hybrid"
+    if on:
+        return "Remote (check)" if rem else "On-site"
+    if hy:
+        return "Hybrid"
+    if rem:
+        return "Remote"
+    if any(w in d for w in REMOTE_WORDS):
+        return "Remote (mentioned)"
+    return "Not stated"
 
 
 def work_type(row, title, desc):
@@ -554,7 +638,7 @@ def badge_map(term, location, pages=3):
     """Reads LinkedIn's own On-site / Hybrid / Remote badges from the public search pages.
     Returns {job_id: badge}. On-site and Hybrid always win over Remote."""
     badges = {}
-    for wt in ("2", "3", "1"):                                   # Remote first, so On-site/Hybrid overwrite it
+    for wt in ("2", "3", "1"):
         for page in range(pages):
             try:
                 r = requests.get(
@@ -568,7 +652,7 @@ def badge_map(term, location, pages=3):
                 if not ids:
                     break
                 for job_id in ids:
-                    badges[job_id] = WT_LABELS[wt]
+                    badges.setdefault(job_id, set()).add(WT_LABELS[wt])
             except Exception:
                 break
             finally:
@@ -641,9 +725,10 @@ def main():
                     [(t, normal_n) for t in cfg["searches"] if not is_senior(t)]   # no "Manager" searches
 
             for location, short in rcfg["locations"]:
-                for term, n in terms:
-                    badges = badge_map(term, location)
-                    df = search(term, n, location)
+                for term, n, remote_pass in [(t, k, rp) for t, k in terms for rp in (True, False)]:
+                    if remote_pass:
+                        badges = badge_map(term, location)
+                    df = search(term, n, location, remote_pass)
                     if df is None or not len(df):
                         continue
                     for _, row in df.iterrows():
@@ -688,13 +773,8 @@ def main():
                         p_label, p_rank = priority(title, desc, company, industry)
                         skills = key_skills(title, desc)
                         role = short_role(title)
-                        # Work type: clear wording in the post first, then LinkedIn's own badge
-                        wtype = work_type(row, title, desc)
-                        badge = badges.get(job_id_of(row), "")
-                        if badge and wtype in ("Not stated", "Remote (mentioned)"):
-                            wtype = badge
-                        elif badge in ("On-site", "Hybrid") and wtype == "Remote" and "remote" not in title.lower():
-                            wtype = badge                                # badge beats a loose "remote" mention
+                        # Work type: LinkedIn's own tags first, clear wording second
+                        wtype = decide_work(row, title, desc, badges.get(job_id_of(row), set()), remote_pass)
                         companies_today.add(co_key)
                         found[key] = {
                             "id": key,
