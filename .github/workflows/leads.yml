@@ -8,13 +8,14 @@ jobs:
   # ---------- Phase 1: job search ----------
   scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 150
+    timeout-minutes: 300
     strategy:
       fail-fast: false
       max-parallel: 20
       matrix:
         category: ["CRM Automation", "SEO", "Performance Marketing", "Customer Service",
-                   "Bookkeeping", "Virtual Assistant"]
+                   "Bookkeeping", "Virtual Assistant", "Lead Generation", "Social Media",
+                   "Content Writing", "Email Marketing", "Design & Video", "Website Support"]
         region: ["USA / Canada", "UK"]
     steps:
       - uses: actions/checkout@v4
