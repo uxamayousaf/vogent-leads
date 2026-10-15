@@ -360,6 +360,22 @@ def is_senior(title):
     return bool(SENIOR_RE.search(title))
 
 
+# Jobs that can't be done remotely, and roles we don't staff
+NOT_REMOTE_TITLE_RE = re.compile(r"\b(retail|in[- ]store|store|cashier|receptionist|front desk|barista|"
+                                 r"warehouse|driver|server|host|hostess)\b", re.I)
+OFF_TARGET_TITLE_RE = re.compile(r"\b(account executive|engineer|strategist|sales development|sdr|bdr|"
+                                 r"sales representative|sales rep|account manager)\b", re.I)
+# The CRM category only counts real CRM jobs (not sales roles that just mention HubSpot)
+CRM_TITLE_RE = re.compile(r"crm|hubspot|highlevel|high level|\bghl\b|automation|funnel|email marketing|"
+                          r"marketing operations|marketing ops", re.I)
+
+
+def wrong_title(title, category):
+    if NOT_REMOTE_TITLE_RE.search(title) or OFF_TARGET_TITLE_RE.search(title):
+        return True
+    return category == "CRM Automation" and not CRM_TITLE_RE.search(title)
+
+
 def title_not_english(title):
     """Catches titles like 'Intégrateur(trice) web' or 'German and English Speaking'."""
     if needs_other_language(title) or LANG_RE.search(title):
@@ -647,8 +663,8 @@ def main():
                         desc = text(row.get("description"))
                         industry = text(row.get("company_industry"))
 
-                        if is_senior(title):
-                            continue                                     # no Senior / Lead / Manager roles
+                        if is_senior(title) or wrong_title(title, cat_name):
+                            continue                                     # senior, in-store, off-target roles
                         if not any(r.search(title + " " + desc) for r in regexes):
                             continue
                         co_key = re.sub(r"\W+", "", company.lower())
