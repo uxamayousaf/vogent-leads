@@ -25,7 +25,8 @@ REGION_ORDER = {"USA": 1, "Canada": 2, "UK": 3}
 # Outreach roles. CRM (GHL / HubSpot) is always first. The others are re-ordered automatically
 # every day by how many small, junior companies posted them in the last 7 days (most first).
 FIXED_FIRST_ROLE = "CRM Automation"
-DATA_ROLES = ["Customer Service", "Bookkeeping", "Performance Marketing", "SEO"]   # default order
+DATA_ROLES = ["Customer Service", "Bookkeeping", "Performance Marketing", "SEO", "Lead Generation",
+              "Social Media", "Content Writing", "Email Marketing", "Design & Video", "Website Support"]
 ROLE_RANK = {FIXED_FIRST_ROLE: 1, **{r: i + 2 for i, r in enumerate(DATA_ROLES)}}
 ROLES = list(ROLE_RANK)                  # VA, AI Automation, RevOps: never contacted automatically
 ROLE_REGIONS = {"SEO": ["USA", "UK"]}    # roles limited to certain client regions
@@ -43,6 +44,12 @@ NOT_EMPLOYER_TITLE_WORDS = ["entry level client", "client relations associate", 
 APIFY_DAILY_BUDGET_USD = 0.24            # both lookup passes together (about $5 a month on weekdays)
 FOUNDER_TITLES = ["Founder", "Co-Founder", "CEO", "Owner", "President", "Managing Director"]
 SPECIALISTS = {
+    "Lead Generation": "appointment setters and lead generation specialists",
+    "Social Media": "social media specialists",
+    "Content Writing": "content writers",
+    "Email Marketing": "email marketing specialists",
+    "Design & Video": "designers and video editors",
+    "Website Support": "website specialists (WordPress, Shopify, Webflow)",
     "CRM Automation": "GoHighLevel specialists",
     "Virtual Assistant": "remote support specialists",
     "AI Automation": "AI and automation specialists",
@@ -59,8 +66,15 @@ EMAIL_LOOKUP_MAX = 45                    # companies checked for an email addres
 SENDER_NAME = "Usama Yousaf"
 SENDER_TITLE = "Founder, Vogent Labs"
 LINKEDIN_URL = "linkedin.com/in/uxamayousaf"
+CALENDLY_URL = "https://calendly.com/vogentlabs"
 LINKEDIN_IN_FIRST_EMAIL_AFTER_DAYS = 14   # first email gets the LinkedIn link once warm-up is done
 EMAIL_SPECIALISTS = {
+    "Lead Generation": "appointment setters and lead generation specialists",
+    "Social Media": "social media specialists",
+    "Content Writing": "content writers",
+    "Email Marketing": "email marketing specialists",
+    "Design & Video": "designers and video editors",
+    "Website Support": "website specialists (WordPress, Shopify, Webflow)",
     "CRM Automation": "GoHighLevel specialists",
     "Virtual Assistant": "remote support staff",
     "AI Automation": "AI and automation specialists",
@@ -76,7 +90,9 @@ WEBAPP_URL = os.environ["SHEET_WEBAPP_URL"]
 TOKEN = os.environ["SHEET_TOKEN"]
 APIFY_TOKEN = os.environ.get("APIFY_TOKEN", "").strip()
 PKT = dt.timezone(dt.timedelta(hours=5))
-WORK_ORDER = {"Remote": 0, "Remote (mentioned)": 1, "Hybrid": 2, "Not stated": 3, "On-site": 4}
+WORK_ORDER = {"Remote": 0, "Remote (check)": 1, "Remote (mentioned)": 1, "Not stated": 2, "Hybrid": 3, "On-site": 4}
+OUTREACH_WORK_TYPES = ["Remote", "Remote (check)", "Remote (mentioned)", "Not stated"]   # never On-site / Hybrid
+EMAIL_DAILY = 30                         # emails per day (USA first, then Canada, then UK)
 TITLE_RANK = ["founder", "co-founder", "ceo", "chief executive", "owner", "president",
               "managing director", "principal", "partner", "coo", "general manager"]
 
@@ -109,6 +125,8 @@ def load_candidates():
 
 
 def eligible(l):
+    if l.get("work_type") not in OUTREACH_WORK_TYPES:
+        return False                       # clearly in-office jobs stay in the Leads tab only
     if l.get("region") not in REGION_ORDER:
         return False
     if l.get("category") not in ROLES:
@@ -128,6 +146,9 @@ def eligible(l):
     return all(str(l.get(k) or "").strip() for k in ("company", "title", "url"))
 
 
+GROWING = set()                          # companies posting 2+ matching roles today
+
+
 def rank_key(l):
     size_min = l.get("size_min")
     size_bucket = 3 if size_min is None else (0 if size_min <= 10 else (1 if size_min <= SMALL_COMPANY else 2))
@@ -137,7 +158,8 @@ def rank_key(l):
     except ValueError:
         newest = 0
     benefits = 1 if l.get("us_benefits") else 0          # full US payroll benefits = harder to convert
-    return (size_bucket, role_rank, WORK_ORDER.get(l.get("work_type"), 9), benefits,
+    growing = 0 if norm(l.get("company")) in GROWING else 1
+    return (size_bucket, growing, role_rank, WORK_ORDER.get(l.get("work_type"), 9), benefits,
             REGION_ORDER.get(l.get("region"), 9), newest)
 
 
@@ -394,6 +416,10 @@ def upwork_leads(today, start_rank):
         country = str(get_path(it, "buyer.location.country", "") or "")
         region = "USA" if country in ("USA", "United States") else ("Canada" if country == "Canada" else "")
         size = get_path(it, "buyer.company.profile.size")
+        spent = get_path(it, "buyer.stats.totalCharges.amount", 0) or 0
+        verified = get_path(it, "buyer.isPaymentMethodVerified", True)
+        if not verified or float(spent or 0) < 100:
+            continue                                       # only clients who have actually paid freelancers
         name = client_name(desc)
         title = str(it.get("title") or "")
         # Senior / Lead / Manager titles are allowed on Upwork (remote by nature)
@@ -460,13 +486,9 @@ def follow_up_dm(lead, first):
     role = "assistant" if lead["category"] == "Virtual Assistant" else lead.get("role") or "open"
     who = specialists(lead, SPECIALISTS)
     hi = f"Thanks for connecting, {first}." if first else "Thanks for connecting."
-    if lead.get("work_type") in ("On-site", "Hybrid"):
-        body = (f" If a remote setup could work for the {role} role, we place dedicated {who} who can start "
-                f"in days, not weeks, at a much lower cost than a local hire.")
-    else:
-        body = (f" If you are still filling the {role} role, we place dedicated {who} who can start in days, "
-                f"not weeks, at a much lower cost than a local hire.")
-    return hi + body + " Happy to share two profiles that match your post if useful."
+    return (f"{hi} If you are still filling the {role} role, we place dedicated {who} who can start soon at a "
+            f"much lower cost than a local hire. Happy to share two profiles that match your post if useful "
+            f"or a quick call if it helps: {CALENDLY_URL}")
 
 
 def named_note(note, first):
@@ -561,7 +583,14 @@ def find_email(website):
     return email, kind
 
 
+BLOCKED_DOMAINS = set()                  # bounced or opted-out domains, never emailed again
+
+
 def email_cap(today):
+    return EMAIL_DAILY
+
+
+def _old_email_cap(today):
     try:
         start = dt.date.fromisoformat(EMAIL_START_DATE)
     except ValueError:
@@ -592,16 +621,22 @@ def build_email(lead, email, kind, first=""):
     hi = greeting(email, kind, company, first)
     skill_txt = (", ".join(skills[:-1]) + " and " + skills[-1]) if len(skills) > 1 else (skills[0] if skills else "")
 
-    subject = f"{role} at {company}" if len(role) <= 40 else f"Your open role at {company}"
+    variant = "A" if sum(map(ord, company)) % 2 == 0 else "B"           # weekly hook test, about 50/50
+    if variant == "A":
+        subject = f"{role} at {company}" if len(role) <= 40 else f"Your open role at {company}"
+    else:
+        subject = f"Quick question about your {role_line} hire" if len(role_line) <= 40 else \
+            f"Quick question about your hire at {company}"
     line1 = (f"Saw {company} is hiring {article(role_line)}" + (f" to handle {skill_txt}." if skill_txt else "."))
     line2 = f"We have {who} who do exactly this kind of work every day"
     line2 += (" and can join in days, not weeks, at a much lower cost than a local hire. "
               "We handle everything on our side, so it stays hassle free for you.")
-    if lead.get("work_type") in ("On-site", "Hybrid"):
-        line3 = "Is being in the office a must for this role, or could a strong remote hire work?"
-    else:
+    if variant == "A":
         line3 = ("What matters most for this hire? Share the top one or two things and I'll tell you "
                  "within a day if we have someone who fits.")
+    else:
+        line3 = ("Is this role still open? If it is, I can explain in two lines how we would fill it faster "
+                 "and for less.")
     sign = f"{SENDER_NAME}\n{SENDER_TITLE}"          # clean signature: name and title only
     sign_li = f"{sign}\n{LINKEDIN_URL}"
     try:
@@ -612,11 +647,17 @@ def build_email(lead, email, kind, first=""):
     body1 = f"{hi}\n\n{line1}\n\n{line2}\n\n{line3}\n\n{sign_li if warm else sign}"
 
     top = skills[0] if skills else "day to day"
-    body2 = (f"{hi}\n\nA quick follow-up on the {role_line} role. If time or budget is what's holding the hire "
-             f"back, a remote specialist can cover the same {top} work at a much lower cost. Happy to answer "
-             f"any questions, or I'll leave it here if you've got it covered.\n\n"
-             f"{sign_li}")
-    return subject, body1, body2
+    fu1 = (f"{hi}\n\nFollowing up in case this got buried. If the {role_line} role is still open, I can send "
+           f"two pre-vetted candidate profiles today so you can compare them with your current applicants. "
+           f"No commitment either way.\n\n{sign_li}")
+    fu2 = (f"{hi}\n\nA quick note on how this usually works for small teams like {company}: we shortlist "
+           f"candidates who already do {top} work, you interview the ones you like, and your pick can start "
+           f"within days. We take care of the admin side, so you only manage the work.\n\n"
+           f"Would a short call this week be useful? You can pick a time here: {CALENDLY_URL}\n\n{sign_li}")
+    fu3 = (f"{hi}\n\nI'll close the loop here so I don't crowd your inbox. If {company} ever needs extra hands "
+           f"on {top} or similar work, just reply to this email and I'll send matching profiles the same day.\n\n"
+           f"Wishing you a great hire either way.\n\n{sign_li}")
+    return subject, body1, [fu1, fu2, fu3], variant
 
 
 # ---------- Main ----------
@@ -636,7 +677,16 @@ def main():
     except Exception as e:
         print("Using default role order:", e)
 
-    leads = [l for l in load_candidates() if eligible(l)]
+    all_leads = load_candidates()
+    per_co = {}
+    for l in all_leads:
+        per_co.setdefault(norm(l.get("company")), set()).add(l.get("title"))
+    GROWING.update(k for k, v in per_co.items() if len(v) >= 2)
+    leads = [l for l in all_leads if eligible(l)]
+    try:
+        BLOCKED_DOMAINS.update(json.loads(post({"action": "blocked_domains"})).get("domains", []))
+    except Exception:
+        pass
     best_per_company = {}
     for l in sorted(leads, key=rank_key):
         best_per_company.setdefault(norm(l["company"]), l)       # one row per company, best job
@@ -666,6 +716,8 @@ def main():
         if emailed < cap and l.get("size_min") is not None and looked < EMAIL_LOOKUP_MAX:
             looked += 1
             email, kind = find_email(l.get("website", ""))
+            if email and email.split("@")[-1].lower() in BLOCKED_DOMAINS:
+                email, kind = "", ""
         if not email and linkedin_n >= DAILY_LINKEDIN:
             continue                                      # LinkedIn is full and no email for this one
         p = free_founder(l["company"], l.get("people"))
@@ -687,11 +739,13 @@ def main():
         }
         if email:
             first = p["first"] if (p and kind != "personal") else ""
-            subject, body1, body2 = build_email(l, email, kind, first)
+            subject, body1, fups, variant = build_email(l, email, kind, first)
             emailed += 1
             rows.append({**base, "channel": "Email", "email": email,
                          "note": body1,           # email 1 (shown in the Connection Note column)
-                         "followup": body2,       # follow-up email (shown in the Follow-up DM column)
+                         "followup": fups[0],     # follow-up 1 (shown in the Follow-up DM column)
+                         "followups": fups,       # all 3 follow-ups, sent automatically if there is no reply
+                         "variant": variant,      # A/B hook test
                          "email_status": "Queued", "subject": subject})
         else:
             first = p["first"] if p else ""
