@@ -262,6 +262,7 @@ def free_founder(company, people=None):
     for name, url, title in (people or []):
         if any(w in title.lower() for w in FOUNDER_WORDS):
             return {"name": clean_name(name), "first": clean_name(name).split(" ")[0], "url": url, "title": title}
+    return None                                          # no web search: "Find founder ↗" button instead
     words = [w for w in re.findall(r"[a-z0-9]+", company.lower()) if len(w) > 2][:3]
     for url, title in ddg_search(f'"{company}" founder OR CEO OR owner site:linkedin.com/in'):
         if "linkedin.com/in/" not in url:
@@ -278,6 +279,10 @@ def free_founder(company, people=None):
 
 
 def linkedin_company_url(company):
+    return "https://www.linkedin.com/search/results/companies/?keywords=" + quote(company)
+
+
+def _old_linkedin_company_url(company):
     for url, title in ddg_search(f'"{company}" site:linkedin.com/company'):
         if "linkedin.com/company/" in url and norm(company)[:8] in norm(title):
             return url.split("?")[0]
@@ -370,6 +375,9 @@ def commission_heavy(desc):
                                                   r"\$\s?\d{2,3}\s*/\s*month base", d))
 
 
+UPWORK_STATS = {"checked": 0, "named": 0, "new": 0}
+
+
 def upwork_leads(today, start_rank):
     if not (UPWORK_ENABLED and APIFY_TOKEN):
         return []
@@ -402,6 +410,7 @@ def upwork_leads(today, start_rank):
                       "title": str(it.get("title") or "GoHighLevel role"), "url": str(it.get("link") or ""),
                       "skills": skills, "keyword": proposal_keyword(desc), "desc": desc})
     print(f"Upwork: {len(items)} GHL jobs checked, {len(leads)} with a named client")
+    UPWORK_STATS.update({"checked": len(items), "named": len(leads)})
     return leads
 
 
@@ -476,6 +485,7 @@ def founder_search_url(company):
 # ---------- 4. Email: find a real address on the company's own website (free) ----------
 EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 BAD_LOCAL = ["noreply", "no-reply", "donotreply", "privacy", "legal", "abuse", "webmaster", "postmaster",
+             "delete", "remove", "request", "help", "dataprotection", "dpo", "optout", "opt-out",
              "unsubscribe", "billing", "invoice", "accounts", "example", "test", "user", "email", "name",
              "yourname", "press", "media", "dmca", "security", "compliance", "gdpr"]
 BAD_DOMAIN = ["example.com", "domain.com", "sentry", "wixpress", "godaddy", "squarespace", "wordpress",
@@ -566,9 +576,9 @@ def greeting(email, kind, company, first=""):
     if first:
         return f"Hi {first},"
     local = email.split("@")[0]
-    if kind == "personal":
-        name = local.split(".")[0]
-        if 3 < len(name) <= 15 and name not in DEPARTMENT_WORDS:
+    if kind == "personal" and re.fullmatch(r"[a-z]{3,15}\.[a-z]{2,20}", local):
+        name = local.split(".")[0]                       # only clear first.last addresses, e.g. sarah.lee@
+        if name not in DEPARTMENT_WORDS:
             return f"Hi {name.capitalize()},"
     return f"Hi {company} team," if len(company) <= 28 else "Hi there,"
 
@@ -701,7 +711,9 @@ def main():
         except Exception:
             new_up = {norm(u["company"]) for u in up}
         queued_keys = {r["key"] for r in rows}
-        for u in [u for u in up if norm(u["company"]) in new_up and norm(u["company"]) not in queued_keys]:
+        fresh_up = [u for u in up if norm(u["company"]) in new_up and norm(u["company"]) not in queued_keys]
+        UPWORK_STATS["new"] = len(fresh_up)
+        for u in fresh_up:
             p = free_founder(u["company"])
             first = p["first"] if p else ""
             rows.append({
@@ -727,7 +739,9 @@ def main():
 
     print("Sheet response:", post({"action": "outreach_add", "rows": rows,
                                    "eligible": len(ranked), "found": len(found),
-                                   "emails": emailed})[:300])
+                                   "emails": emailed,
+                                   "upwork": f'{UPWORK_STATS["checked"]} checked, {UPWORK_STATS["named"]} named, '
+                                             f'{UPWORK_STATS["new"]} new'})[:300])
 
 
 if __name__ == "__main__":
