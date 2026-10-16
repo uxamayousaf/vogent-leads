@@ -422,7 +422,8 @@ def is_senior(title):
 NOT_REMOTE_TITLE_RE = re.compile(r"\b(retail|in[- ]store|store|cashier|receptionist|front desk|barista|"
                                  r"warehouse|driver|server|host|hostess)\b", re.I)
 OFF_TARGET_TITLE_RE = re.compile(r"\b(account executive|engineer|strategist|sales development|sdr|bdr|"
-                                 r"sales representative|sales rep|account manager)\b", re.I)
+                                 r"sales representative|sales rep|account manager|business development|"
+                                 r"founding|controller)\b", re.I)
 # The CRM category only counts real CRM jobs (not sales roles that just mention HubSpot)
 CRM_TITLE_RE = re.compile(r"crm|hubspot|highlevel|high level|\bghl\b|automation|funnel|email marketing|"
                           r"marketing operations|marketing ops", re.I)
