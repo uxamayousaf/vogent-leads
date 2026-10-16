@@ -38,10 +38,11 @@ NOT_EMPLOYER_NAME_WORDS = ["careers", "jobs", "job board", "jobboard", "hiring",
                            "staffing", "talent", "wiraa", "remotehunter", "jobot", "dice", "ziprecruiter",
                            "abilitylinks", "linkedin", "indeed", "glassdoor", "upwork", "fiverr",
                            "jobgether", "town of", "city of", "county", "government", "ministry",
-                           "municipality", "university", "school district", "college"]
+                           "municipality", "university", "school district", "college", "authority",
+                           "department", "district", "state of", "commonwealth", "public schools"]
 NOT_EMPLOYER_TITLE_WORDS = ["entry level client", "client relations associate", "booking hotels",
                             "travel agent", "brand ambassador", "commission only", "commission-only"]
-APIFY_DAILY_BUDGET_USD = 0.24            # both lookup passes together (about $5 a month on weekdays)
+APIFY_DAILY_BUDGET_USD = 0.30            # whole Apify budget per weekday: Upwork first, the rest for LinkedIn founders
 FOUNDER_TITLES = ["Founder", "Co-Founder", "CEO", "Owner", "President", "Managing Director"]
 SPECIALISTS = {
     "Lead Generation": "appointment setters and lead generation specialists",
@@ -62,7 +63,7 @@ SPECIALISTS = {
 # ---------- Email (Phase 2, Step B) ----------
 EMAIL_ENABLED = True
 EMAIL_START_DATE = "2026-10-13"          # warm-up: week 1 = 10 a day, week 2 = 20, then 30
-EMAIL_LOOKUP_MAX = 45                    # companies checked for an email address each day
+EMAIL_LOOKUP_MAX = 90                    # companies checked for an email address each day
 SENDER_NAME = "Usama Yousaf"
 SENDER_TITLE = "Founder, Vogent Labs"
 LINKEDIN_URL = "linkedin.com/in/uxamayousaf"
@@ -347,7 +348,8 @@ labs studio partners consulting holdings llc inc ltd co founder owner ceo real e
 long term ongoing new local online virtual executive medical custom lead leads funnel automation ai seo
 summary description responsibilities requirements qualifications benefits compensation details project
 apply application proposal note please thank thanks hello hi welcome intro introduction background mission
-key what's we're you'll we've it's let's""".split())
+key what's we're you'll we've it's let's value values vision culture story offer stack full-stack
+who what why how""".split())
 
 
 def client_name(desc):
@@ -366,7 +368,9 @@ def client_name(desc):
             first = name.split(" ")[0].lower()
             if first in NOT_A_NAME or len(name) < 3 or name.lower() in NOT_A_NAME:
                 continue
-            tokens = [t.lower().strip("'’&.,") for t in name.split()]
+            tokens = [t.lower().strip("'’&.,") for t in re.split(r"[\s-]+", name)]
+            if tokens and tokens[0] in GENERIC_WORDS:
+                continue                                   # "What We Value We", "Our Team" ...
             distinctive = [t for t in tokens if t and t not in GENERIC_WORDS]
             if not distinctive:
                 continue                                   # e.g. "Very Important We", "There", "Below"
@@ -499,20 +503,24 @@ def named_note(note, first):
     return note
 
 
-def founder_search_url(company):
-    return ("https://www.linkedin.com/search/results/people/?keywords="
-            + quote(f'{company} founder OR CEO OR owner'))
+def founder_search_url(company, company_url=""):
+    """Opens the company's own LinkedIn People page; a search only if we have no company page."""
+    if slug(company_url):
+        return "https://www.linkedin.com/company/" + slug(company_url) + "/people/"
+    return ("https://www.linkedin.com/search/results/companies/?keywords=" + quote(company))
 
 
 # ---------- 4. Email: find a real address on the company's own website (free) ----------
 EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 BAD_LOCAL = ["noreply", "no-reply", "donotreply", "privacy", "legal", "abuse", "webmaster", "postmaster",
              "delete", "remove", "request", "help", "dataprotection", "dpo", "optout", "opt-out",
+             "clerk", "records", "regulatory", "accessibility", "submit",
              "unsubscribe", "billing", "invoice", "accounts", "example", "test", "user", "email", "name",
              "yourname", "press", "media", "dmca", "security", "compliance", "gdpr"]
 BAD_DOMAIN = ["example.com", "domain.com", "sentry", "wixpress", "godaddy", "squarespace", "wordpress",
               "email.com", "yourdomain", "company.com", "mysite", "schema.org", "w3.org"]
-HIRING_LOCAL = ["careers", "career", "jobs", "job", "hr", "hiring", "recruit", "talent", "people", "work"]
+HIRING_LOCAL = ["careers", "career", "jobs", "job", "hr", "hiring", "recruit", "talent", "people", "work",
+                "applications", "apply"]
 GENERAL_LOCAL = ["hello", "hi", "info", "contact", "team", "office", "admin", "sales", "inquiries",
                  "enquiries", "connect", "mail", "general"]
 SKIP_LOCAL_WORDS = ["sales", "ventas", "vendor", "intl", "practice", "partner", "support", "service",
@@ -566,6 +574,8 @@ def find_email(website):
         if not (dom.endswith(domain) or domain.endswith(dom)):
             continue                                            # only the company's own domain
         head = re.split(r"[._-]", local)[0]
+        if head in ("pr", "press", "media", "news", "foia"):
+            continue
         if local in HIRING_LOCAL or any(local.startswith(h) for h in HIRING_LOCAL):
             kind, rank = "hiring", 1
         elif local in GENERAL_LOCAL and local not in ("sales", "admin"):
@@ -638,7 +648,7 @@ def build_email(lead, email, kind, first=""):
         line3 = ("Is this role still open? If it is, I can explain in two lines how we would fill it faster "
                  "and for less.")
     sign = f"{SENDER_NAME}\n{SENDER_TITLE}"          # clean signature: name and title only
-    sign_li = f"{sign}\n{LINKEDIN_URL}"
+    sign_li = sign                                    # no LinkedIn link in any email
     try:
         warm = (dt.datetime.now(PKT).date() - dt.date.fromisoformat(EMAIL_START_DATE)).days \
             >= LINKEDIN_IN_FIRST_EMAIL_AFTER_DAYS
@@ -704,6 +714,10 @@ def main():
         print("Could not check earlier outreach, continuing:", reply[:200])
         new_keys = {norm(l["company"]) for l in ranked}
     fresh_ranked = [l for l in ranked if norm(l["company"]) in new_keys]
+    # ----- Upwork first: it gets the Apify budget before LinkedIn founders -----
+    up = upwork_leads(today, 0)
+    upwork_spent = 0.01 + 0.003 * UPWORK_STATS["checked"] if UPWORK_ENABLED and APIFY_TOKEN else 0
+
     # ----- Smart split, strict rank order -----
     # Each company, best first: confirmed size + good email found -> Email (until today's email limit),
     # otherwise -> LinkedIn (until 20). So both channels reach the smallest companies first.
@@ -734,7 +748,7 @@ def main():
             "title": l["title"],
             "work_type": l.get("work_type", ""),
             "dm_name": p["name"] if p else "Find founder ↗",
-            "dm_url": p["url"] if p else founder_search_url(l["company"]),
+            "dm_url": p["url"] if p else founder_search_url(l["company"], l.get("company_url", "")),
             "dm_title": p["title"] if p else "",
         }
         if email:
@@ -752,12 +766,29 @@ def main():
             linkedin_n += 1
             rows.append({**base, "channel": "LinkedIn", "email": "",
                          "note": named_note(l.get("note", ""), first),
-                         "followup": follow_up_dm(l, first), "email_status": ""})
+                         "followup": follow_up_dm(l, first), "email_status": "", "_lead": l})
+
+    # ----- Apify founder lookup for LinkedIn rows, with whatever budget Upwork left today -----
+    left = APIFY_DAILY_BUDGET_USD - upwork_spent
+    missing = [r for r in rows if r["channel"] == "LinkedIn" and r["dm_name"] == "Find founder ↗"
+               and slug(r.get("company_url"))]
+    if missing and left >= 0.06:
+        hits = match_people([r["_lead"] for r in missing],
+                            apify_people(sorted({r["company_url"] for r in missing}), budget=left))
+        for r in missing:
+            p = hits.get(r["company"])
+            if not p:
+                continue
+            r.update({"dm_name": p["name"], "dm_url": p["url"], "dm_title": p["title"],
+                      "note": named_note(r["_lead"].get("note", ""), p["first"]),
+                      "followup": follow_up_dm(r["_lead"], p["first"])})
+        print(f"Apify founders: {len(hits)} found with ${left:.2f} left after Upwork")
+    for r in rows:
+        r.pop("_lead", None)
     found = {r["company"]: 1 for r in rows if r["dm_name"] != "Find founder ↗"}
     print(f"LinkedIn rows: {linkedin_n} | emails queued: {emailed} (limit {cap}) | decision makers found: {len(found)}")
 
-    # ----- Upwork GHL leads with a named client -----
-    up = upwork_leads(today, DAILY_LINKEDIN + emailed)
+    # ----- Upwork GHL leads with a named client (searched at the start) -----
     if up:
         reply = post({"action": "outreach_check", "companies": [norm(u["company"]) for u in up]})
         try:
