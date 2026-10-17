@@ -489,6 +489,12 @@ def article(role):
 
 
 
+def clean_company(name):
+    """Company name for messages: drops emojis and decorative symbols (same as find_leads.py)."""
+    out = re.sub(r"[^\w\s&'.,()+\-/]", "", str(name or ""), flags=re.UNICODE)
+    return re.sub(r"\s{2,}", " ", out).strip() or str(name or "").strip()
+
+
 def msg_role(lead):
     """Short role used in every message. Virtual Assistant roles are never called VA."""
     if lead.get("category") == "Virtual Assistant":
@@ -504,24 +510,68 @@ def msg_role(lead):
     return role or "open"
 
 
-def skill_text(lead):
-    skills = [x for x in str(lead.get("skills") or "").split(" · ") if x][:3]
+# Skills used in messages (the Leads tab keeps the full list as found):
+# named tools first (GoHighLevel, QuickBooks...), then specific tasks, vague words last or dropped.
+GENERIC_SKILLS = {"research", "scheduling", "social media", "data entry", "workflows", "calendar management",
+                  "inbox management", "dashboards"}
+# Role-typical skills when a job post has no usable skills (messages only)
+DEFAULT_SKILLS = {
+    "CRM Automation": ["CRM setup", "automations", "pipeline management"],
+    "SEO": ["on-page SEO", "keyword research", "Search Console"],
+    "Performance Marketing": ["Google Ads", "Meta Ads", "conversion tracking"],
+    "Customer Service": ["ticketing", "live chat", "phone support"],
+    "Bookkeeping": ["QuickBooks", "reconciliations", "month-end close"],
+    "Lead Generation": ["prospecting", "lead lists", "appointment setting"],
+    "Social Media": ["Instagram", "TikTok", "content calendars"],
+    "Content Writing": ["blog posts", "SEO writing", "copywriting"],
+    "Email Marketing": ["email campaigns", "automated flows", "list segmentation"],
+    "Design & Video": ["Photoshop", "Canva", "video editing"],
+    "Website Support": ["WordPress", "site updates", "landing pages"],
+    "Virtual Assistant": ["calendar management", "inbox management", "travel booking"],
+}
+
+
+def skill_list(lead):
+    """Ordered skills for messages: tools first, specific tasks next, vague words last (dropped if 2+ better)."""
+    raw = [x.strip() for x in str(lead.get("skills") or "").split(" · ") if x.strip()]
+    tools = [x for x in raw if any(ch.isupper() for ch in x) and x.lower() not in GENERIC_SKILLS]
+    tasks = [x for x in raw if x not in tools and x.lower() not in GENERIC_SKILLS]
+    vague = [x for x in raw if x.lower() in GENERIC_SKILLS]
+    good = tools + tasks
+    if not good:                                    # nothing specific in the post: role-typical skills
+        return list(DEFAULT_SKILLS.get(lead.get("category"), vague))
+    return good if len(good) >= 2 else good + vague
+
+
+def join_skills(skills):
     if not skills:
         return ""
     return skills[0] if len(skills) == 1 else ", ".join(skills[:-1]) + " and " + skills[-1]
 
 
+def skill_text(lead):
+    return join_skills(skill_list(lead)[:3])
+
+
 def linkedin_messages(lead, first):
     """DM after accept, Follow-up 1, Follow-up 2 (one universal sequence for every role)."""
-    role, company, skills = msg_role(lead), lead["company"], skill_text(lead)
+    role, company = msg_role(lead), clean_company(lead["company"])
+    skills = skill_list(lead)
+    sk3 = join_skills(skills[:3])
+    who = (f"We work with remote professionals experienced in {sk3}." if sk3
+           else "We work with remote professionals who do this kind of work every day.")
     dm = (f"Thanks for connecting, {first}!" if first else "Thanks for connecting!") + \
-        (f" Saw your opening for {article(role)} at {company}. Are you open to remote talent for this "
-         f"position, or mainly looking to hire locally?")
-    fit = (f"We may have some good candidates with experience in {skills} who could be a fit for your {role} "
-           f"opening.") if skills else f"We may have some good candidates who could be a fit for your {role} opening."
-    fu1 = (f"{'Hi ' + first if first else 'Hi'}, thought I'd share why I reached out. I run Vogent Labs, where we "
-           f"help businesses hire dedicated remote professionals at a much lower cost than a local hire.\n\n"
-           f"{fit} Happy to share a couple of profiles if useful.")
+        (f" Saw your {role} opening at {company}. {who} Curious, have you found the right person out of the "
+         f"applicants yet, or still going through them?")
+    if len(skills) >= 2:
+        hard = f"finding someone strong in both {skills[0]} and {skills[1]} is not easy"
+    elif skills:
+        hard = f"finding someone really strong in {skills[0]} is not easy"
+    else:
+        hard = f"finding the right {role} is not easy"
+    fu1 = (f"{'Hi ' + first if first else 'Hi'}, {hard}, which is why I reached out. I run Vogent Labs, where we "
+           f"help businesses hire dedicated remote professionals at a much lower cost than a local hire. "
+           f"Happy to share a couple of profiles that match your {role} post if useful.")
     fu2 = (f"{'Hey ' + first if first else 'Hi'}, checking back on the {role} opening. If you're still hiring, "
            f"I'd be happy to share a couple of relevant profiles. If you've already filled it, no worries at all!")
     return [dm, fu1, fu2]
@@ -656,7 +706,7 @@ def greeting(email, kind, company, first=""):
 
 def build_email(lead, email, kind, first=""):
     """One universal sequence for every role: email 1 + 3 follow-ups (sent as replies in the same thread)."""
-    company = lead["company"]
+    company = clean_company(lead["company"])
     role = msg_role(lead)
     skills = skill_text(lead)
     hi = greeting(email, kind, company, first)
