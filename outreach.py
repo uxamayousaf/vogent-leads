@@ -66,6 +66,8 @@ EMAIL_START_DATE = "2026-10-13"          # warm-up: week 1 = 10 a day, week 2 = 
 EMAIL_LOOKUP_MAX = 90                    # companies checked for an email address each day
 SENDER_NAME = "Usama Yousaf"
 SENDER_TITLE = "Founder, Vogent Labs"
+SENDER_FIRST = "Usama"                   # sign-off name in every email
+SENDER_SITE = "vogentlabs.com"           # plain text, first email only
 LINKEDIN_URL = "linkedin.com/in/uxamayousaf"
 CALENDLY_URL = "https://calendly.com/vogentlabs"
 LINKEDIN_IN_FIRST_EMAIL_AFTER_DAYS = 14   # first email gets the LinkedIn link once warm-up is done
@@ -93,7 +95,8 @@ APIFY_TOKEN = os.environ.get("APIFY_TOKEN", "").strip()
 PKT = dt.timezone(dt.timedelta(hours=5))
 WORK_ORDER = {"Remote": 0, "Remote (check)": 1, "Remote (mentioned)": 1, "Not stated": 2, "Hybrid": 3, "On-site": 4}
 OUTREACH_WORK_TYPES = ["Remote", "Remote (check)", "Remote (mentioned)", "Not stated"]   # never On-site / Hybrid
-EMAIL_DAILY = 30                         # emails per day (USA first, then Canada, then UK)
+EMAIL_DAILY = 22                         # new emails per day (USA first, then Canada, then UK).
+                                         # 22 new + 3 follow-ups each = about 80 sends a day, under the 95 cap
 TITLE_RANK = ["founder", "co-founder", "ceo", "chief executive", "owner", "president",
               "managing director", "principal", "partner", "coo", "general manager"]
 
@@ -486,19 +489,48 @@ def article(role):
 
 
 
-def follow_up_dm(lead, first):
-    role = "assistant" if lead["category"] == "Virtual Assistant" else lead.get("role") or "open"
-    who = specialists(lead, SPECIALISTS)
-    hi = f"Thanks for connecting, {first}." if first else "Thanks for connecting."
-    return (f"{hi} If you are still filling the {role} role, we place dedicated {who} who can start soon at a "
-            f"much lower cost than a local hire. Happy to share two profiles that match your post if useful "
-            f"or a quick call if it helps: {CALENDLY_URL}")
+def msg_role(lead):
+    """Short role used in every message. Virtual Assistant roles are never called VA."""
+    if lead.get("category") == "Virtual Assistant":
+        return "assistant"
+    role = re.sub(r"virtual assistant", "assistant", lead.get("role") or "", flags=re.I).strip()
+    role = re.sub(r"^(?:(?:remote|hybrid|part[- ]time|full[- ]time|freelance|contract|temporary|temp)\s+)+", "",
+                  role, flags=re.I).strip() or role          # also cleans leads found before this change
+    if len(role) > 45:                                       # never end on "and", "of", "&" ...
+        words = role[:45].rsplit(" ", 1)[0].split(" ")
+        while len(words) > 1 and words[-1].lower() in ("and", "or", "&", "of", "for", "with", "to", "the", "a", "an", "in"):
+            words.pop()
+        role = " ".join(words)
+    return role or "open"
+
+
+def skill_text(lead):
+    skills = [x for x in str(lead.get("skills") or "").split(" · ") if x][:3]
+    if not skills:
+        return ""
+    return skills[0] if len(skills) == 1 else ", ".join(skills[:-1]) + " and " + skills[-1]
+
+
+def linkedin_messages(lead, first):
+    """DM after accept, Follow-up 1, Follow-up 2 (one universal sequence for every role)."""
+    role, company, skills = msg_role(lead), lead["company"], skill_text(lead)
+    dm = (f"Thanks for connecting, {first}!" if first else "Thanks for connecting!") + \
+        (f" Saw your opening for {article(role)} at {company}. Are you open to remote talent for this "
+         f"position, or mainly looking to hire locally?")
+    fit = (f"We may have some good candidates with experience in {skills} who could be a fit for your {role} "
+           f"opening.") if skills else f"We may have some good candidates who could be a fit for your {role} opening."
+    fu1 = (f"{'Hi ' + first if first else 'Hi'}, thought I'd share why I reached out. I run Vogent Labs, where we "
+           f"help businesses hire dedicated remote professionals at a much lower cost than a local hire.\n\n"
+           f"{fit} Happy to share a couple of profiles if useful.")
+    fu2 = (f"{'Hey ' + first if first else 'Hi'}, checking back on the {role} opening. If you're still hiring, "
+           f"I'd be happy to share a couple of relevant profiles. If you've already filled it, no worries at all!")
+    return [dm, fu1, fu2]
 
 
 def named_note(note, first):
     if first and note.startswith("Hi,"):
         candidate = f"Hi {first}," + note[3:]
-        if len(candidate) <= 300:
+        if len(candidate) <= 200:                          # fits free and Premium LinkedIn accounts
             return candidate
     return note
 
@@ -623,50 +655,42 @@ def greeting(email, kind, company, first=""):
 
 
 def build_email(lead, email, kind, first=""):
+    """One universal sequence for every role: email 1 + 3 follow-ups (sent as replies in the same thread)."""
     company = lead["company"]
-    role = re.sub(r"virtual assistant", "assistant", lead.get("role") or "open role", flags=re.I)
-    role_line = role if lead["category"] != "Virtual Assistant" else "assistant"
-    skills = [x for x in str(lead.get("skills") or "").split(" · ") if x]
-    who = specialists(lead, EMAIL_SPECIALISTS)
+    role = msg_role(lead)
+    skills = skill_text(lead)
     hi = greeting(email, kind, company, first)
-    skill_txt = (", ".join(skills[:-1]) + " and " + skills[-1]) if len(skills) > 1 else (skills[0] if skills else "")
 
-    variant = "A" if sum(map(ord, company)) % 2 == 0 else "B"           # weekly hook test, about 50/50
-    if variant == "A":
-        subject = f"{role} at {company}" if len(role) <= 40 else f"Your open role at {company}"
+    # Subject line test only (bodies are identical). A2 / B2 so older A / B results never mix in.
+    variant = "A2" if sum(map(ord, company)) % 2 == 0 else "B2"
+    if variant == "A2":
+        subject = f"{role} opening at {company}" if len(role) <= 40 and len(company) <= 40 \
+            else f"Your open role at {company}"
     else:
-        subject = f"Quick question about your {role_line} hire" if len(role_line) <= 40 else \
+        subject = f"Quick question about your {role} hire" if len(role) <= 40 else \
             f"Quick question about your hire at {company}"
-    line1 = (f"Saw {company} is hiring {article(role_line)}" + (f" to handle {skill_txt}." if skill_txt else "."))
-    line2 = f"We have {who} who do exactly this kind of work every day"
-    line2 += (" and can join in days, not weeks, at a much lower cost than a local hire. "
-              "We handle everything on our side, so it stays hassle free for you.")
-    if variant == "A":
-        line3 = ("What matters most for this hire? Share the top one or two things and I'll tell you "
-                 "within a day if we have someone who fits.")
-    else:
-        line3 = ("Is this role still open? If it is, I can explain in two lines how we would fill it faster "
-                 "and for less.")
-    sign = f"{SENDER_NAME}\n{SENDER_TITLE}"          # clean signature: name and title only
-    sign_li = sign                                    # no LinkedIn link in any email
-    try:
-        warm = (dt.datetime.now(PKT).date() - dt.date.fromisoformat(EMAIL_START_DATE)).days \
-            >= LINKEDIN_IN_FIRST_EMAIL_AFTER_DAYS
-    except ValueError:
-        warm = False
-    body1 = f"{hi}\n\n{line1}\n\n{line2}\n\n{line3}\n\n{sign_li if warm else sign}"
 
-    top = skills[0] if skills else "day to day"
-    fu1 = (f"{hi}\n\nFollowing up in case this got buried. If the {role_line} role is still open, I can send "
-           f"two pre-vetted candidate profiles today so you can compare them with your current applicants. "
-           f"No commitment either way.\n\n{sign_li}")
-    fu2 = (f"{hi}\n\nA quick note on how this usually works for small teams like {company}: we shortlist "
-           f"candidates who already do {top} work, you interview the ones you like, and your pick can start "
-           f"within days. We take care of the admin side, so you only manage the work.\n\n"
-           f"Would a short call this week be useful? You can pick a time here: {CALENDLY_URL}\n\n{sign_li}")
-    fu3 = (f"{hi}\n\nI'll close the loop here so I don't crowd your inbox. If {company} ever needs extra hands "
-           f"on {top} or similar work, just reply to this email and I'll send matching profiles the same day.\n\n"
-           f"Wishing you a great hire either way.\n\n{sign_li}")
+    fit = (f"We may have candidates with experience in {skills} who could be a good fit for what you're "
+           f"looking for.") if skills else "We may have candidates who could be a good fit for what you're looking for."
+    body1 = (f"{hi}\n\nI noticed {company} is hiring for {article(role)} and thought I'd reach out.\n\n"
+             f"I run Vogent Labs, where we help businesses hire dedicated remote professionals. {fit}\n\n"
+             f"We handle the staffing and payroll on our end, so you can focus on getting the right person "
+             f"into your team.\n\nWould you be open to reviewing a couple of profiles?\n\n"
+             f"Best,\n{SENDER_FIRST}\n{SENDER_TITLE}\n{SENDER_SITE}")
+    pros = (f"a couple of remote professionals with experience in {skills}" if skills
+            else "a couple of remote professionals who could be a fit")
+    fu1 = (f"{hi}\n\nWanted to follow up on my note about the {role} position.\n\n"
+           f"If you're still reviewing candidates, happy to share {pros}, at a much lower cost than a local "
+           f"hire.\n\nWould that be useful?\n\nBest,\n{SENDER_FIRST}")
+    fu2 = (f"{hi}\n\nNot sure if you've filled the {role} position yet.\n\n"
+           f"At Vogent Labs, we help companies bring on dedicated remote talent while managing the staffing and "
+           f"payroll on our side.\n\nIf you're still exploring options, I'd be happy to share some relevant "
+           f"profiles. Or if a quick call is easier, you can pick a time here: {CALENDLY_URL}\n\n"
+           f"Best,\n{SENDER_FIRST}")
+    fu3 = (f"{hi}\n\nI'll leave it here for now.\n\nIf the {role} position is still open, happy to share a "
+           f"couple of candidates. And if you've already hired, perhaps we can connect for future openings.\n\n"
+           f"All the best with the search!\n\n{SENDER_FIRST}")
+    subject = subject[:1].upper() + subject[1:]
     return subject, body1, [fu1, fu2, fu3], variant
 
 
@@ -756,17 +780,18 @@ def main():
             subject, body1, fups, variant = build_email(l, email, kind, first)
             emailed += 1
             rows.append({**base, "channel": "Email", "email": email,
-                         "note": body1,           # email 1 (shown in the Connection Note column)
-                         "followup": fups[0],     # follow-up 1 (shown in the Follow-up DM column)
+                         "note": body1,           # email 1
+                         "followup": fups[0],     # follow-up 1
                          "followups": fups,       # all 3 follow-ups, sent automatically if there is no reply
+                         "messages": [body1] + fups,   # Message 1-4 columns
                          "variant": variant,      # A/B hook test
                          "email_status": "Queued", "subject": subject})
         else:
             first = p["first"] if p else ""
             linkedin_n += 1
-            rows.append({**base, "channel": "LinkedIn", "email": "",
-                         "note": named_note(l.get("note", ""), first),
-                         "followup": follow_up_dm(l, first), "email_status": "", "_lead": l})
+            note, li = named_note(l.get("note", ""), first), linkedin_messages(l, first)
+            rows.append({**base, "channel": "LinkedIn", "email": "", "note": note, "followup": li[0],
+                         "messages": [note] + li, "email_status": "", "_lead": l})
 
     # ----- Apify founder lookup for LinkedIn rows, with whatever budget Upwork left today -----
     left = APIFY_DAILY_BUDGET_USD - upwork_spent
@@ -779,9 +804,9 @@ def main():
             p = hits.get(r["company"])
             if not p:
                 continue
+            note, li = named_note(r["_lead"].get("note", ""), p["first"]), linkedin_messages(r["_lead"], p["first"])
             r.update({"dm_name": p["name"], "dm_url": p["url"], "dm_title": p["title"],
-                      "note": named_note(r["_lead"].get("note", ""), p["first"]),
-                      "followup": follow_up_dm(r["_lead"], p["first"])})
+                      "note": note, "followup": li[0], "messages": [note] + li})
         print(f"Apify founders: {len(hits)} found with ${left:.2f} left after Upwork")
     for r in rows:
         r.pop("_lead", None)
@@ -817,8 +842,9 @@ def main():
                 "dm_url": p["url"] if p else founder_search_url(u["company"]),
                 "dm_title": p["title"] if p else "",
                 "email": "",
-                "note": upwork_note(u, first),          # LinkedIn note (Connection Note column)
-                "followup": upwork_proposal(u, first),  # Upwork proposal draft (Follow-up DM column)
+                "note": upwork_note(u, first),          # LinkedIn note (Message 1)
+                "followup": upwork_proposal(u, first),  # Upwork proposal draft (Message 2)
+                "messages": [upwork_note(u, first), upwork_proposal(u, first), "", ""],
                 "email_status": "",
             })
 
