@@ -12,6 +12,7 @@ tags Remote / Hybrid / On-site, and sends everything to your Google Sheet.
 Each category + region group runs on its own GitHub machine in parallel.
 You only ever edit the SETTINGS section.
 """
+import datetime as dt
 import json
 import os
 import re
@@ -25,7 +26,10 @@ from langdetect import DetectorFactory, detect
 DetectorFactory.seed = 0
 
 # ============================ SETTINGS ============================
-HOURS_OLD = 48          # one run per day, 48h window catches anything missed yesterday
+# One run per day: 48h window catches anything missed yesterday. Mondays look back 72h so jobs
+# posted on Friday (US business hours, after Friday's run) still reach Monday's outreach.
+PKT = dt.timezone(dt.timedelta(hours=5))
+HOURS_OLD = 72 if dt.datetime.now(PKT).weekday() == 0 else 48
 MAX_EMPLOYEES = 200     # companies bigger than this are skipped (unknown size is kept)
 
 # rank = order in your sheet. scale = fewer results per search for smaller markets.
@@ -360,7 +364,20 @@ def short_role(title):
     clean = re.sub(r"^(?:remote|hybrid|on-?site)\s*[|:\-–—]\s*", "", clean, flags=re.I)  # "Remote | ..."
     clean = re.split(r"\s+@\s+|\s+at\s+[A-Z]", clean)[0]          # "... @ Company" / "... at Company"
     role = re.split(r"\s+[-|–—/]\s+|\s*\||\(|\[|,|:", clean)[0].strip()
-    return role or clean
+    # "Remote Bookkeeper" -> "Bookkeeper" (work type is already its own column; reads better in messages)
+    bare = re.sub(r"^(?:(?:remote|hybrid|part[- ]time|full[- ]time|freelance|contract|temporary|temp)\s+)+", "",
+                  role, flags=re.I).strip()
+    return bare or role or clean
+
+
+def trim_role(role, limit=45):
+    """Shortens a very long role at a word break and never ends on 'and', 'of', '&' and similar."""
+    if len(role) <= limit:
+        return role
+    words = role[:limit].rsplit(" ", 1)[0].split(" ")
+    while len(words) > 1 and words[-1].lower() in ("and", "or", "&", "of", "for", "with", "to", "the", "a", "an", "in"):
+        words.pop()
+    return " ".join(words)
 
 
 def evidence(desc, regexes):
@@ -518,43 +535,25 @@ def join_words(items):
     return items[0] if len(items) == 1 else ", ".join(items[:-1]) + " and " + items[-1]
 
 
+NOTE_LIMIT = 200   # LinkedIn's limit for notes on free accounts (300 on Premium), so it fits either way
+
+
 def connection_note(company, role, category, skills, work):
-    """Custom note per lead, under LinkedIn's 300 character limit. No pitch, ends with a question.
-    On-site / Hybrid jobs get the "hiring locally or remote" question; remote jobs get the other styles."""
+    """Universal connection request for every role (same wording for all categories).
+    Starts with "Hi," so outreach.py can add the person's first name once it is known."""
     if category == "Virtual Assistant":
         role = "assistant"           # keep "VA" wording out of outreach copy
-    role = role if len(role) <= 45 else role[:45].rsplit(" ", 1)[0]
+    role = trim_role(role)
     first_word = role.split(" ")[0] if role else ""
     if first_word.isupper() and len(first_word) > 1:          # acronyms: "an SEO", "a CRM"
         a_role = ("an " if first_word[0] in "AEFHILMNORSX" else "a ") + role
     else:
         a_role = ("an " if role[:1].lower() in "aeiou" else "a ") + role
-    local_angle = work in ("On-site", "Hybrid")
-    for n in (3, 2, 1, 0):
-        sk = skills[:n]
-        if sk:
-            s_txt = join_words(sk)
-            if local_angle:
-                note = (f"Hi, came across the {role} opening at {company}. Strong {s_txt} experience "
-                        f"{'is a tough mix' if len(sk) > 1 else 'is hard'} to find. Are you set on hiring locally, "
-                        f"or open to remote talent? Happy to connect.")
-            else:
-                options = [
-                    f"Hi, saw {company} is hiring {a_role} to handle {s_txt}. That usually means a busy stretch "
-                    f"for the team. Still looking, or close to filling it? Would be good to connect.",
-                    f"Hi, noticed {company} needs someone strong on {s_txt}. How is the search for your {role} "
-                    f"going so far? Would be glad to connect.",
-                ]
-                note = options[sum(map(ord, company + role)) % 2]   # same lead always gets the same style
-        elif local_angle:
-            note = (f"Hi, saw {company} is hiring {a_role}. Are you set on hiring locally, or open to remote "
-                    f"talent? Happy to connect.")
-        else:
-            note = (f"Hi, saw {company} is hiring {a_role}. Are you still looking, or close to filling it? "
-                    f"Would be good to connect.")
-        if len(note) <= 300:
-            return note
-    return note[:297].rsplit(" ", 1)[0] + "..."
+    tail = " Curious how the search is going. Thought it'd be good to connect!"
+    note = f"Hi, noticed {company} is hiring for {a_role}.{tail}"
+    if len(note) + 25 > NOTE_LIMIT:                            # room for a first name added later
+        note = f"Hi, noticed you're hiring for {a_role}.{tail}"   # very long company names
+    return note if len(note) <= NOTE_LIMIT else note[:NOTE_LIMIT - 3].rsplit(" ", 1)[0] + "..."
 
 
 def priority(title, desc, company, industry):
