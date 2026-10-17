@@ -359,10 +359,26 @@ def text(value):
     return str(value)
 
 
+ROLE_NOUN = re.compile(r"\b(?:specialist|manager|coordinator|assistant|rep|representative|associate|executive|"
+                       r"writer|designer|editor|bookkeeper|accountant|clerk|agent|strategist|analyst|developer|"
+                       r"admin|administrator|officer|expert|consultant|marketer|producer|creator|technician|"
+                       r"generalist|setter|caller|virtual assistant)s?\b", re.I)
+
+
+def clean_company(name):
+    """Company name for messages: drops emojis and decorative symbols ("Citizen Agency 🐻" -> "Citizen Agency")."""
+    out = re.sub(r"[^\w\s&'.,()+\-/]", "", str(name or ""), flags=re.UNICODE)
+    return re.sub(r"\s{2,}", " ", out).strip() or str(name or "").strip()
+
+
 def short_role(title):
     clean = re.sub(r"^[^\w]+", "", title)                       # drop leading emojis/symbols
     clean = re.sub(r"^(?:remote|hybrid|on-?site)\s*[|:\-–—]\s*", "", clean, flags=re.I)  # "Remote | ..."
     clean = re.split(r"\s+@\s+|\s+at\s+[A-Z]", clean)[0]          # "... @ Company" / "... at Company"
+    # "Paid Search / Paid Social Specialist": keep both halves when only the second half names the role
+    halves = re.split(r"\s+/\s+", clean)
+    if len(halves) > 1 and not ROLE_NOUN.search(halves[0]) and ROLE_NOUN.search(halves[1]):
+        clean = "/".join(halves[:2])
     role = re.split(r"\s+[-|–—/]\s+|\s*\||\(|\[|,|:", clean)[0].strip()
     # "Remote Bookkeeper" -> "Bookkeeper" (work type is already its own column; reads better in messages)
     bare = re.sub(r"^(?:(?:remote|hybrid|part[- ]time|full[- ]time|freelance|contract|temporary|temp)\s+)+", "",
@@ -549,6 +565,7 @@ def connection_note(company, role, category, skills, work):
         a_role = ("an " if first_word[0] in "AEFHILMNORSX" else "a ") + role
     else:
         a_role = ("an " if role[:1].lower() in "aeiou" else "a ") + role
+    company = clean_company(company)
     tail = " Curious how the search is going. Thought it'd be good to connect!"
     note = f"Hi, noticed {company} is hiring for {a_role}.{tail}"
     if len(note) + 25 > NOTE_LIMIT:                            # room for a first name added later
