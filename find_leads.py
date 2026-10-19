@@ -14,6 +14,7 @@ You only ever edit the SETTINGS section.
 """
 import datetime as dt
 import json
+import unicodedata
 import os
 import re
 import time
@@ -206,6 +207,9 @@ CATEGORIES = {
 
 # ---------- Recruiter / agency filter (add names anytime, lowercase) ----------
 AGENCY_BLOCKLIST = [
+    # job boards and gig marketplaces (not employers)
+    "isarta", "goodwork", "mercor", "outlier ai", "alignerr", "dataannotation", "data annotation tech",
+    "braintrust", "toptal", "crossover", "remotasks", "micro1",
     "robert half", "insight global", "randstad", "adecco", "teksystems", "kforce",
     "aerotek", "kelly services", "manpower", "express employment", "beacon hill",
     "belay", "boldly", "wing assistant", "prialto", "time etc", "virtual staff finder",
@@ -304,7 +308,8 @@ LOCATION_LOCK_PATTERNS = [
     re.compile(r"\b" + _PLACES + r"[\s-]*(?:based\s+)?(?:residents?|citizens?|candidates?|applicants?|persons?)\s+only\b", re.I),
     re.compile(r"\b(?:only|exclusively)\s+(?:open\s+to|accepting|considering|hiring)\s+(?:candidates|applicants|people|those|individuals)"
                r"\s+(?:who\s+(?:are|live)\s+)?(?:located|based|residing|living|in|from)\b", re.I),
-    re.compile(r"\(\s*" + _PLACES + r"[\s-]*only\s*\)", re.I),
+    re.compile(r"\(\s*" + _PLACES + r"[\s-]*(?:based\s+)?only\s*\)", re.I),
+    re.compile(r"\b" + _PLACES + r"[\s-]*based\s+only\b", re.I),
     re.compile(r"\b(?:remote|work from home|wfh)\W{1,3}" + _PLACES + r"[\s-]*only\b", re.I),
     re.compile(r"\b[Mm]ust\s+(?:be\s+)?(?:a\s+)?(?:US|U\.S\.|UK|Canadian|American|German|Australian)\s+(?:citizen|resident)"),
     re.compile(r"\bcandidates?\s+(?:must|need to|should)\s+(?:be\s+)?(?:located|based|residing)\s+in\b", re.I),
@@ -365,9 +370,15 @@ ROLE_NOUN = re.compile(r"\b(?:specialist|manager|coordinator|assistant|rep|repre
                        r"generalist|setter|caller|virtual assistant)s?\b", re.I)
 
 
+def is_emoji_char(ch):
+    """Emojis and picture symbols only; letters and normal punctuation like @ & . stay."""
+    o = ord(ch)
+    return unicodedata.category(ch) in ("So", "Cs") or 0xFE00 <= o <= 0xFE0F or o == 0x200D or 0x1F000 <= o <= 0x1FAFF
+
+
 def clean_company(name):
     """Company name for messages: drops emojis and decorative symbols ("Citizen Agency 🐻" -> "Citizen Agency")."""
-    out = re.sub(r"[^\w\s&'.,()+\-/]", "", str(name or ""), flags=re.UNICODE)
+    out = "".join(ch for ch in str(name or "") if not is_emoji_char(ch))
     return re.sub(r"\s{2,}", " ", out).strip() or str(name or "").strip()
 
 
@@ -460,12 +471,68 @@ OFF_TARGET_TITLE_RE = re.compile(r"\b(account executive|engineer|strategist|sale
 # The CRM category only counts real CRM jobs (not sales roles that just mention HubSpot)
 CRM_TITLE_RE = re.compile(r"crm|hubspot|highlevel|high level|\bghl\b|automation|funnel|email marketing|"
                           r"marketing operations|marketing ops", re.I)
+GHL_RE = re.compile(r"go\s?high\s?level|\bhighlevel\b|\bghl\b|lead\s?connector", re.I)
+# No budget behind these: interns, volunteers, students
+NO_BUDGET_TITLE_RE = re.compile(r"\b(intern|interns|internship|volunteer|apprentice|apprenticeship|student|"
+                                r"fellowship)\b", re.I)
+# Gig listings dressed up as jobs ("Expert Opportunity ... $70/hr", "Publish Book in 2 weeks")
+GIG_TITLE_RE = re.compile(r"expert opportunity|\$\s?\d+(?:\.\d+)?\s?(?:/|per\s)\s?(?:hr|hour)\b|"
+                          r"publish (?:a |your )?book|\bbook author\b", re.I)
+# "Can we staff this?" The title must look like the work its category covers.
+# General marketing and communications roles count for every marketing category.
+MARKETING_GENERAL = (r"\bmarketing\b|\bmarketer\b|\bcontent\b|digital (?:marketing|media)|growth market|demand gen|"
+                     r"brand(?:ing)? (?:specialist|coordinator|assistant|associate|executive)|"
+                     r"media (?:coordinator|specialist|assistant|associate|executive)|publishing coordinator|"
+                     r"communications?\s*(?:&|and)?\s*(?:marketing\s+)?"
+                     r"(?:coordinator|specialist|assistant|associate|executive|officer)")
+ROLE_FIT = {
+    "SEO": r"seo|\bgeo\b|\baeo\b|search|link ?build|backlink|organic|keyword|" + MARKETING_GENERAL,
+    "Performance Marketing": r"paid|ppc|\bsem\b|ads\b|media buy|media plan|performance|advertising|ad ops|acquisition|influencer|"
+                             + MARKETING_GENERAL,
+    "Customer Service": r"customer|client (?:support|service|success|care|experience)|support|help ?desk|"
+                        r"care (?:associate|agent|coordinator|representative)|call cent|contact cent|chat|"
+                        r"member services|patient (?:coordinator|services|care)|guest|reservation|concierge|"
+                        r"service (?:representative|rep|associate|agent|coordinator)",
+    "Bookkeeping": r"bookkeep|account|fiscal|financ|revenue|receivabl|payabl|payroll|billing|treasur|\btax\b|"
+                   r"quickbooks|xero|reconcil|invoic|ledger|\bap\b|\bar\b",
+    "Virtual Assistant": r"assistant|virtual|admin|secretar|data entry|clerk|office (?:coordinator|manager)|"
+                         r"operations (?:coordinator|associate)|scheduler|dispatch|coordinator",
+    "Lead Generation": r"lead gen|appointment|setter|cold call|outbound|prospect|lead research|list build|"
+                       r"data research|\bbdc\b|telemarket|telesales|scheduler|sales (?:assistant|coordinator|support)|" + MARKETING_GENERAL,
+    "Social Media": r"social|community (?:manager|coordinator|specialist)|community (?:&|and) engagement|content creator|"
+                    r"tiktok|instagram|\bugc\b|influencer|creative|e[- ]?commerce|" + MARKETING_GENERAL,
+    "Content Writing": r"writ|copy|blog|editor|proofread|" + MARKETING_GENERAL,
+    "Email Marketing": r"email|klaviyo|newsletter|lifecycle|retention|marketing automation|\bcrm\b|e[- ]?commerce|" + MARKETING_GENERAL,
+    "Design & Video": r"design|video|graphic|motion|animat|editor|illustrat|creative|\bui\b|\bux\b|3d|thumbnail|"
+                      r"photograph|visual|multimedia|producer|courseware|e-?learning|content creator",
+    "Website Support": r"web|wordpress|shopify|webflow|\bsite\b|\bcms\b|landing page|wix|squarespace|front.?end|"
+                       r"html|e[- ]?commerce",
+}
+ROLE_FIT_RE = {k: re.compile(v, re.I) for k, v in ROLE_FIT.items()}
+# Never our kind of hire, whatever the category
+NOT_STAFFABLE_RE = re.compile(r"\b(analyst|reporter|journalist|technician)\b", re.I)
 
 
-def wrong_title(title, category):
+def wrong_title(title, category, desc=""):
+    """True for roles we should not pitch: in-store, off-target, no budget, gig listings, or not this category's work."""
     if NOT_REMOTE_TITLE_RE.search(title) or OFF_TARGET_TITLE_RE.search(title):
         return True
-    return category == "CRM Automation" and not CRM_TITLE_RE.search(title)
+    if NO_BUDGET_TITLE_RE.search(title) or GIG_TITLE_RE.search(title):
+        return True
+    if category == "CRM Automation":
+        # A job that names GoHighLevel is a GHL lead whatever its title ("Marketing Assistant (GHL)")
+        return not (CRM_TITLE_RE.search(title) or GHL_RE.search(title + " " + desc))
+    if NOT_STAFFABLE_RE.search(title) and not re.search(r"customer", title, re.I):
+        return True
+    fit = ROLE_FIT_RE.get(category)
+    return bool(fit) and not fit.search(title)
+
+
+def crm_manager_title(title, category):
+    """'CRM Manager' / 'Marketing Automation Manager': hands-on at small companies, allowed up to 50 staff."""
+    if category != "CRM Automation" or not CRM_TITLE_RE.search(title):
+        return False
+    return not is_senior(re.sub(r"\bmanagers?\b", "", title, flags=re.I))
 
 
 def title_not_english(title):
@@ -722,6 +789,7 @@ def search(term, n, location, remote=False):
 def main():
     found = {}
     checked, ex_agency, ex_big, ex_lang, ex_incomplete, ex_loc = set(), set(), set(), set(), set(), set()
+    ex_senior, ex_role = set(), set()                       # skip reasons, shown in the Run Log
     companies_today = set()
     ran = []
 
@@ -739,7 +807,8 @@ def main():
             deep_n = max(10, int(cfg["deep_results"] * rcfg["scale"]))
             normal_n = max(10, int(cfg["normal_results"] * rcfg["scale"]))
             terms = [(t, deep_n) for t in cfg["deep_searches"] if not is_senior(t)] + \
-                    [(t, normal_n) for t in cfg["searches"] if not is_senior(t)]   # no "Manager" searches
+                    [(t, normal_n) for t in cfg["searches"]
+                     if not is_senior(t) or crm_manager_title(t, cat_name)]   # "Manager" only for CRM
 
             for location, short in rcfg["locations"]:
                 for term, n, remote_pass in [(t, k, rp) for t, k in terms for rp in (True, False)]:
@@ -765,8 +834,13 @@ def main():
                         desc = text(row.get("description"))
                         industry = text(row.get("company_industry"))
 
-                        if is_senior(title) or wrong_title(title, cat_name):
-                            continue                                     # senior, in-store, off-target roles
+                        crm_mgr = is_senior(title) and crm_manager_title(title, cat_name)
+                        if is_senior(title) and not crm_mgr:
+                            ex_senior.add(key)
+                            continue
+                        if wrong_title(title, cat_name, desc):
+                            ex_role.add(key)                             # in-store, off-target, intern, gig
+                            continue
                         if not any(r.search(title + " " + desc) for r in regexes):
                             continue
                         co_key = re.sub(r"\W+", "", company.lower())
@@ -785,6 +859,9 @@ def main():
                         size_label, size_min, page_industry, website = company_size(company_url, row)
                         if size_min is not None and size_min > MAX_EMPLOYEES:
                             ex_big.add(key)
+                            continue
+                        if crm_mgr and (size_min is None or size_min > 50):
+                            ex_senior.add(key)                           # CRM managers only at small companies
                             continue
 
                         p_label, p_rank = priority(title, desc, company, industry)
@@ -828,6 +905,7 @@ def main():
         l["priority_rank"], l["region_rank"], WORK_ORDER.get(l["work_type"], 9), l["posted"]))
     print(f"\nChecked {len(checked)} | agencies {len(ex_agency)} | big {len(ex_big)} | "
           f"non-English {len(ex_lang)} | location-locked {len(ex_loc)} | incomplete {len(ex_incomplete)} | "
+          f"senior {len(ex_senior)} | wrong role {len(ex_role)} | "
           f"matches {len(leads)}")
 
     # Hand today's leads to the Phase 2 outreach step (GitHub passes this file along)
@@ -841,7 +919,8 @@ def main():
         json={"token": TOKEN, "category": ", ".join(ran), "leads": leads,
               "checked": len(checked), "excluded": len(ex_agency),
               "excluded_big": len(ex_big), "excluded_lang": len(ex_lang),
-              "excluded_incomplete": len(ex_incomplete), "excluded_location": len(ex_loc)},
+              "excluded_incomplete": len(ex_incomplete), "excluded_location": len(ex_loc),
+              "skipped_senior": len(ex_senior), "skipped_role": len(ex_role)},
         timeout=180,
     )
     print("Sheet response:", r.text[:300])
