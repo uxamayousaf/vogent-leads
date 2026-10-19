@@ -60,12 +60,12 @@ CATEGORIES = {
         "must_mention": GHL_TERMS + ["hubspot", "zoho crm", "keap", "activecampaign", "pipedrive"],
     },
     "AI Automation": {
-        "enabled": False, "deep_results": 80, "normal_results": 40,
+        "enabled": True, "deep_results": 80, "normal_results": 40,
         "deep_searches": ["AI Automation Specialist", "n8n", "Make.com"],
         "searches": [
-            "Automation Engineer", "Zapier Expert", "AI Agent Developer",
+            "Automation Specialist", "Zapier Expert", "AI Agent Developer",
             "Workflow Automation Specialist", "AI Integration Specialist",
-            "No-Code Automation", "AI Automation Engineer",
+            "No-Code Automation", "AI Automation Consultant",
         ],
         "must_mention": [
             "n8n", "make.com", "integromat", "zapier", "ai agent", "ai agents",
@@ -830,7 +830,26 @@ def search(term, n, location, remote=False):
         time.sleep(4)
 
 
+POOL = {}
+
+
+def load_pool():
+    """Available candidates per role, counted by the Sheet from the candidate sheet (numbers only)."""
+    try:
+        r = requests.post(WEBAPP_URL, json={"token": TOKEN, "action": "role_stats", "days": 7}, timeout=120)
+        POOL.update(json.loads(r.text).get("pool", {}))
+    except Exception as e:
+        print("Pool counts not available, normal search:", e)
+
+
+def light_search(cat_name):
+    """Roles with zero available candidates get a light search. Virtual Assistant keeps its normal search
+    (Leads tab only). If the pool could not be read, every role is searched normally."""
+    return bool(POOL) and cat_name != "Virtual Assistant" and int(POOL.get(cat_name, 0)) == 0
+
+
 def main():
+    load_pool()
     found = {}
     checked, ex_agency, ex_big, ex_lang, ex_incomplete, ex_loc = set(), set(), set(), set(), set(), set()
     ex_senior, ex_role = set(), set()                       # skip reasons, shown in the Run Log
@@ -854,6 +873,10 @@ def main():
             terms = [(t, deep_n) for t in cfg["deep_searches"] if not is_senior(t)] + \
                     [(t, normal_n) for t in cfg["searches"]
                      if not is_senior(t) or crm_manager_title(t, cat_name)]   # "Manager" only for CRM
+            if light_search(cat_name):
+                # no available candidates for this role: a quick look for the Leads tab only
+                terms = [(t, 15) for t in cfg["deep_searches"][:2]]
+                print(f"{cat_name}: no available candidates, light search")
 
             for location, short in rcfg["locations"]:
                 for term, n, remote_pass in [(t, k, rp) for t, k in terms for rp in (True, False)]:
@@ -969,7 +992,8 @@ def main():
               "excluded_big": len(ex_big), "excluded_lang": len(ex_lang),
               "excluded_incomplete": len(ex_incomplete), "excluded_location": len(ex_loc),
               "skipped_senior": len(ex_senior), "skipped_role": len(ex_role),
-              "wt_confirmed": len(wt_confirmed), "wt_checked": len(wt_checked)},
+              "wt_confirmed": len(wt_confirmed), "wt_checked": len(wt_checked),
+              "wt_remote": sum(1 for l in leads if l.get("work_type") == "Remote")},
         timeout=180,
     )
     print("Sheet response:", r.text[:300])
