@@ -338,7 +338,7 @@ WEBAPP_URL = os.environ["SHEET_WEBAPP_URL"]
 TOKEN = os.environ["SHEET_TOKEN"]
 ONLY_CATEGORY = os.environ.get("CATEGORY", "").strip()
 ONLY_REGION = os.environ.get("REGION", "").strip()
-WORK_ORDER = {"Remote": 0, "Remote (mentioned)": 1, "Hybrid": 2, "Not stated": 3, "On-site": 4}
+WORK_ORDER = {"Remote": 0, "Not confirmed": 1, "Not stated": 2, "Hybrid": 3, "On-site": 4}
 UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                     "(KHTML, like Gecko) Chrome/126 Safari/537.36"}
 SIZE_CACHE = {}
@@ -557,30 +557,74 @@ REMOTE_WORDS = ["remote", "work from home", "work-from-home", "wfh", "work from 
                 "fully distributed", "distributed team", "telecommute", "telecommuting"]
 
 
-def decide_work(row, title, desc, tags, remote_pass=False):
-    """LinkedIn's own Remote / Hybrid / On-site tags first, clear wording in the post second.
-    If they disagree, the job is kept as 'Remote (check)' so no good lead is lost."""
+def decide_work(row, title, desc, page_tag=""):
+    """Work type from LinkedIn's own tag on the job page first (the Remote / Hybrid / On-site you see on LinkedIn).
+    Appearing in LinkedIn's Remote search filter is NOT proof: that filter also returns office jobs.
+      - page says On-site / Hybrid -> On-site / Hybrid (even if the text mentions remote)
+      - page says Remote, or LinkedIn's location field says Remote -> Remote
+      - page unreadable: Remote only when the location AND the description both clearly say remote,
+        otherwise 'Not confirmed' (kept in the Leads tab, never sent to outreach)"""
+    if page_tag in ("On-site", "Hybrid"):
+        return page_tag
+    loc_remote = "remote" in text(row.get("location")).lower()
+    if page_tag == "Remote" or loc_remote:
+        return "Remote"
     d = (title + " " + desc).lower()
     on = any(p in d for p in STRONG_ONSITE) or bool(STRONG_ONSITE_RE.search(d))
     hy = any(p in d for p in STRONG_HYBRID)
-    rem = any(p in d for p in STRONG_REMOTE) or "remote" in (text(row.get("location")) + " " + title).lower()
-    tagged_remote = "Remote" in tags or remote_pass or str(row.get("is_remote")).lower() == "true"
-    tagged_office = "On-site" in tags or "Hybrid" in tags
-    if tagged_remote and not tagged_office:
-        return "Remote (check)" if on else "Remote"
-    if tagged_office:
-        if rem:
-            return "Remote (check)"
-        return "On-site" if "On-site" in tags else "Hybrid"
+    rem = any(p in d for p in STRONG_REMOTE)
     if on:
-        return "Remote (check)" if rem else "On-site"
+        return "On-site"
     if hy:
         return "Hybrid"
-    if rem:
-        return "Remote"
-    if any(w in d for w in REMOTE_WORDS):
-        return "Remote (mentioned)"
+    if rem or any(w in d for w in REMOTE_WORDS):
+        return "Not confirmed"
     return "Not stated"
+
+
+PAGE_TAG_CACHE = {}
+
+
+def page_workplace(job_id):
+    """Reads the workplace type LinkedIn shows on the job's own public page: 'Remote', 'Hybrid', 'On-site' or ''."""
+    if not job_id:
+        return ""
+    if job_id in PAGE_TAG_CACHE:
+        return PAGE_TAG_CACHE[job_id]
+    tag = ""
+    # 1) the job's own card (only this job, no "similar jobs" list that could mislead)
+    try:
+        r = requests.get(f"https://www.linkedin.com/jobs-guest/jobs/api/jobPosting/{job_id}", headers=UA, timeout=20)
+        if r.status_code == 200:
+            h = r.text
+            m = re.search(r'(?i)(?:workplace_?types?|formattedWorkplaceType|workplaceType)\W{1,40}?'
+                          r'(remote|hybrid|on-?site)', h)
+            if m:
+                tag = m.group(1)
+            else:                                          # location line on the card: "London, England (On-site)"
+                for line in re.findall(r'(?i)topcard__flavor[^>]*>\s*([^<]{0,200})', h):
+                    m = re.search(r'(?i)\((remote|hybrid|on-?site)\)', line)
+                    if m:
+                        tag = m.group(1)
+                        break
+    except Exception:
+        pass
+    time.sleep(1.2)
+    # 2) the full public page: Google-style job data marks remote jobs as TELECOMMUTE
+    if not tag:
+        try:
+            r = requests.get(f"https://www.linkedin.com/jobs/view/{job_id}/", headers=UA, timeout=20)
+            if r.status_code == 200:
+                for block in re.findall(r'<script type="application/ld\+json">(.*?)</script>', r.text, re.S):
+                    if '"JobPosting"' in block and re.search(r'"jobLocationType"\s*:\s*"TELECOMMUTE"', block):
+                        tag = "remote"
+                        break
+        except Exception:
+            pass
+        time.sleep(1.2)
+    tag = {"remote": "Remote", "hybrid": "Hybrid"}.get(tag.lower(), "On-site" if tag else "")
+    PAGE_TAG_CACHE[job_id] = tag
+    return tag
 
 
 def work_type(row, title, desc):
@@ -790,6 +834,7 @@ def main():
     found = {}
     checked, ex_agency, ex_big, ex_lang, ex_incomplete, ex_loc = set(), set(), set(), set(), set(), set()
     ex_senior, ex_role = set(), set()                       # skip reasons, shown in the Run Log
+    wt_checked, wt_confirmed = set(), set()                 # work type read from LinkedIn's job page
     companies_today = set()
     ran = []
 
@@ -812,8 +857,6 @@ def main():
 
             for location, short in rcfg["locations"]:
                 for term, n, remote_pass in [(t, k, rp) for t, k in terms for rp in (True, False)]:
-                    if remote_pass:
-                        badges = badge_map(term, location)
                     df = search(term, n, location, remote_pass)
                     if df is None or not len(df):
                         continue
@@ -868,7 +911,11 @@ def main():
                         skills = key_skills(title, desc)
                         role = short_role(title)
                         # Work type: LinkedIn's own tags first, clear wording second
-                        wtype = decide_work(row, title, desc, badges.get(job_id_of(row), set()), remote_pass)
+                        page_tag = page_workplace(job_id_of(row))      # LinkedIn's own tag on the job page
+                        wt_checked.add(key)
+                        if page_tag:
+                            wt_confirmed.add(key)
+                        wtype = decide_work(row, title, desc, page_tag)
                         companies_today.add(co_key)
                         found[key] = {
                             "id": key,
@@ -906,6 +953,7 @@ def main():
     print(f"\nChecked {len(checked)} | agencies {len(ex_agency)} | big {len(ex_big)} | "
           f"non-English {len(ex_lang)} | location-locked {len(ex_loc)} | incomplete {len(ex_incomplete)} | "
           f"senior {len(ex_senior)} | wrong role {len(ex_role)} | "
+          f"work type read from LinkedIn {len(wt_confirmed)}/{len(wt_checked)} | "
           f"matches {len(leads)}")
 
     # Hand today's leads to the Phase 2 outreach step (GitHub passes this file along)
@@ -920,7 +968,8 @@ def main():
               "checked": len(checked), "excluded": len(ex_agency),
               "excluded_big": len(ex_big), "excluded_lang": len(ex_lang),
               "excluded_incomplete": len(ex_incomplete), "excluded_location": len(ex_loc),
-              "skipped_senior": len(ex_senior), "skipped_role": len(ex_role)},
+              "skipped_senior": len(ex_senior), "skipped_role": len(ex_role),
+              "wt_confirmed": len(wt_confirmed), "wt_checked": len(wt_checked)},
         timeout=180,
     )
     print("Sheet response:", r.text[:300])
