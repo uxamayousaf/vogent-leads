@@ -93,8 +93,8 @@ WEBAPP_URL = os.environ["SHEET_WEBAPP_URL"]
 TOKEN = os.environ["SHEET_TOKEN"]
 APIFY_TOKEN = os.environ.get("APIFY_TOKEN", "").strip()
 PKT = dt.timezone(dt.timedelta(hours=5))
-WORK_ORDER = {"Remote": 0, "Remote (check)": 1, "Remote (mentioned)": 1, "Not stated": 2, "Hybrid": 3, "On-site": 4}
-OUTREACH_WORK_TYPES = ["Remote", "Remote (check)", "Remote (mentioned)", "Not stated"]   # never On-site / Hybrid
+WORK_ORDER = {"Remote": 0, "Not confirmed": 1, "Remote (check)": 1, "Remote (mentioned)": 1, "Not stated": 2, "Hybrid": 3, "On-site": 4}
+OUTREACH_WORK_TYPES = ["Remote"]   # only jobs LinkedIn itself shows as Remote (never On-site, Hybrid or unconfirmed)
 EMAIL_DAILY = 22                         # new emails per day (USA first, then Canada, then UK).
                                          # 22 new + 3 follow-ups each = about 80 sends a day, under the 95 cap
 TITLE_RANK = ["founder", "co-founder", "ceo", "chief executive", "owner", "president",
