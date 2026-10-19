@@ -9,6 +9,7 @@ Your LinkedIn account is never used. You only edit the SETTINGS section.
 import datetime as dt
 import glob
 import json
+import math
 import unicodedata
 import os
 import re
@@ -23,10 +24,11 @@ MAX_COMPANY_SIZE = 200                   # 1 to 200 staff; 50 or fewer rank firs
 SMALL_COMPANY = 50
 WEEKDAYS_ONLY = True                     # Monday to Friday (Pakistan time)
 REGION_ORDER = {"USA": 1, "Canada": 2, "UK": 3}
-# Outreach roles. CRM (GHL / HubSpot) is always first. The others are re-ordered automatically
-# every day by how many small, junior companies posted them in the last 7 days (most first).
+# Outreach roles. Every morning each role gets a score (see role_scores) from the candidate pool,
+# how remote-friendly its jobs were in the last 7 days, and (later) its reply rate.
+# CRM (GHL / HubSpot) leads are listed first when they exist. VA and RevOps: never contacted automatically.
 FIXED_FIRST_ROLE = "CRM Automation"
-DATA_ROLES = ["Customer Service", "Bookkeeping", "Performance Marketing", "SEO", "Lead Generation",
+DATA_ROLES = ["AI Automation", "Customer Service", "Bookkeeping", "Performance Marketing", "SEO", "Lead Generation",
               "Social Media", "Content Writing", "Email Marketing", "Design & Video", "Website Support"]
 ROLE_RANK = {FIXED_FIRST_ROLE: 1, **{r: i + 2 for i, r in enumerate(DATA_ROLES)}}
 ROLES = list(ROLE_RANK)                  # VA, AI Automation, RevOps: never contacted automatically
@@ -332,8 +334,8 @@ def _old_linkedin_company_url(company):
 UPWORK_ENABLED = True
 UPWORK_ACTOR = "flash_mage~upwork"
 UPWORK_QUERIES = ["GoHighLevel", "HighLevel", "GHL"]
-UPWORK_LIMIT = 40                        # newest jobs checked per day (about $0.12)
-UPWORK_COST_CAP_USD = 0.20
+UPWORK_LIMIT = 80                        # newest GHL jobs checked per day (about $0.25); Upwork is where GHL jobs are
+UPWORK_COST_CAP_USD = 0.26
 GHL_SKILLS = [("funnels", ["funnel"]), ("workflows", ["workflow", "automation"]), ("pipelines", ["pipeline"]),
               ("SMS follow-ups", ["sms", "text follow"]), ("email campaigns", ["email marketing", "email campaign",
               "email sequence", "newsletter"]), ("calendars", ["calendar", "appointment"]),
@@ -806,6 +808,76 @@ def build_email(lead, email, kind, first=""):
     return subject, body1, [fu1, fu2, fu3], variant
 
 
+# ---------- Self-adjusting role priority ----------
+MARKET_PRIOR, MARKET_PRIOR_WEIGHT = 0.25, 20   # until a role has data, assume an average market
+REPLY_MIN_SENT = 20                            # replies count once a role has this many emails sent
+MIN_SLOTS = 2                                  # every role with candidates keeps at least this many slots
+
+
+def role_scores(info):
+    """score = pool strength x market fit x replies, for every outreach role.
+    pool strength: available candidates compared with the biggest pool (square root, so small pools still count)
+    market fit: share of the role's jobs (last 7 days) that were confirmed Remote, direct, not 'US only', <=200 staff
+    replies: switches on per role after 20 emails sent"""
+    pool, market, replies = info.get("pool", {}), info.get("market", {}), info.get("replies", {})
+    roles = [FIXED_FIRST_ROLE] + DATA_ROLES
+    biggest = max([int(pool.get(r, 0)) for r in roles] + [1])
+    scores = {}
+    for r in roles:
+        avail = int(pool.get(r, 0))
+        if not avail:
+            scores[r] = 0.0                          # no available candidates: no outreach for this role
+            continue
+        strength = math.sqrt(avail / biggest)
+        m = market.get(r, {})
+        fit = (m.get("good", 0) + MARKET_PRIOR * MARKET_PRIOR_WEIGHT) / (m.get("total", 0) + MARKET_PRIOR_WEIGHT)
+        rp = replies.get(r, {})
+        reply_factor = 1.0
+        if rp.get("sent", 0) >= REPLY_MIN_SENT:
+            reply_factor = min(2.0, max(0.5, 0.5 + 25 * rp.get("replied", 0) / rp["sent"]))
+        scores[r] = strength * fit * reply_factor
+    return scores
+
+
+def role_quotas(scores, available_leads, slots):
+    """Shares the day's outreach slots between roles in proportion to their scores.
+    Roles with candidates and leads keep at least MIN_SLOTS; a role never gets more slots than it has leads."""
+    live = {r: s for r, s in scores.items() if s > 0 and available_leads.get(r, 0) > 0}
+    quotas = {r: min(MIN_SLOTS, available_leads[r]) for r in live}
+    left = slots - sum(quotas.values())
+    while left > 0 and live:
+        open_roles = {r: s for r, s in live.items() if quotas[r] < available_leads[r]}
+        if not open_roles:
+            break
+        total = sum(open_roles.values())
+        # give one slot to the role furthest below its fair share
+        r = max(open_roles, key=lambda k: open_roles[k] / total * slots - quotas[k])
+        quotas[r] += 1
+        left -= 1
+    return quotas
+
+
+def order_by_quota(ranked, quotas):
+    """Interleaves roles so each gets its share in its own best-first order; CRM leads first.
+    Leads beyond the quotas follow (best role first) to fill any slot that is still open."""
+    queues = {}
+    for l in ranked:
+        queues.setdefault(l.get("category"), []).append(l)
+    roles = sorted(quotas, key=lambda r: (r != FIXED_FIRST_ROLE, -quotas[r]))
+    ordered, taken = [], {r: 0 for r in roles}
+    while True:
+        moved = False
+        for r in roles:
+            if taken[r] < quotas[r] and taken[r] < len(queues.get(r, [])):
+                ordered.append(queues[r][taken[r]])
+                taken[r] += 1
+                moved = True
+        if not moved:
+            break
+    rest = [l for r in roles for l in queues.get(r, [])[taken[r]:]]
+    return ordered + rest
+
+
 # ---------- Main ----------
 def main():
     today = dt.datetime.now(PKT)
@@ -813,15 +885,17 @@ def main():
         print("Weekend: no outreach queue today.")
         return
 
-    # Role order: CRM first, the rest by last 7 days of small, junior companies (most first)
+    # Role scores: candidate pool x market fit x replies (all recalculated every morning)
+    info = {}
     try:
-        stats = json.loads(post({"action": "role_stats", "days": 7})).get("counts", {})
-        order = sorted(DATA_ROLES, key=lambda r: -int(stats.get(r, 0)))
-        ROLE_RANK.clear()
-        ROLE_RANK.update({FIXED_FIRST_ROLE: 1, **{r: i + 2 for i, r in enumerate(order)}})
-        print("Role order today:", [FIXED_FIRST_ROLE] + order, stats)
+        info = json.loads(post({"action": "role_stats", "days": 7}))
     except Exception as e:
-        print("Using default role order:", e)
+        print("Role data not available, using equal scores:", e)
+    scores = role_scores(info) if info.get("pool") else {r: 1.0 for r in [FIXED_FIRST_ROLE] + DATA_ROLES}
+    order = sorted(scores, key=lambda r: -scores[r])
+    ROLE_RANK.clear()
+    ROLE_RANK.update({r: i + 1 for i, r in enumerate(order)})
+    print("Role scores today:", {r: round(scores[r], 3) for r in order}, "| pool:", info.get("pool", {}))
 
     all_leads = load_candidates()
     per_co = {}
@@ -849,7 +923,14 @@ def main():
     except Exception:
         print("Could not check earlier outreach, continuing:", reply[:200])
         new_keys = {norm(l["company"]) for l in ranked}
-    fresh_ranked = [l for l in ranked if norm(l["company"]) in new_keys]
+    fresh_ranked = [l for l in ranked if norm(l["company"]) in new_keys and scores.get(l.get("category"), 0) > 0]
+    slots = DAILY_LINKEDIN + (email_cap(today) if EMAIL_ENABLED else 0)
+    per_role = {}
+    for l in fresh_ranked:
+        per_role[l.get("category")] = per_role.get(l.get("category"), 0) + 1
+    quotas = role_quotas(scores, per_role, slots)
+    fresh_ranked = order_by_quota(fresh_ranked, quotas)
+    print("Slots per role today:", quotas)
     # ----- Upwork first: it gets the Apify budget before LinkedIn founders -----
     up = upwork_leads(today, 0)
     upwork_spent = 0.01 + 0.003 * UPWORK_STATS["checked"] if UPWORK_ENABLED and APIFY_TOKEN else 0
@@ -883,6 +964,7 @@ def main():
             "job_url": l["url"],
             "title": l["title"],
             "work_type": l.get("work_type", ""),
+            "category": l.get("category", ""),
             "dm_name": p["name"] if p else "Find founder ↗",
             "dm_url": p["url"] if p else founder_search_url(l["company"], l.get("company_url", "")),
             "dm_title": p["title"] if p else "",
@@ -961,6 +1043,7 @@ def main():
             })
 
     print("Sheet response:", post({"action": "outreach_add", "rows": rows,
+                                   "role_scores": {r: round(v, 4) for r, v in scores.items()}, "quotas": quotas,
                                    "eligible": len(ranked), "found": len(found),
                                    "emails": emailed,
                                    "upwork": f'{UPWORK_STATS["checked"]} checked, {UPWORK_STATS["named"]} named, '
