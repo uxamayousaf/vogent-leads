@@ -9,6 +9,7 @@ Your LinkedIn account is never used. You only edit the SETTINGS section.
 import datetime as dt
 import glob
 import json
+import unicodedata
 import os
 import re
 import time
@@ -66,8 +67,7 @@ EMAIL_START_DATE = "2026-10-13"          # warm-up: week 1 = 10 a day, week 2 = 
 EMAIL_LOOKUP_MAX = 90                    # companies checked for an email address each day
 SENDER_NAME = "Usama Yousaf"
 SENDER_TITLE = "Founder, Vogent Labs"
-SENDER_FIRST = "Usama"                   # sign-off name in every email
-SENDER_SITE = "vogentlabs.com"           # plain text, first email only
+SIGNATURE = f"{SENDER_NAME}\n{SENDER_TITLE}"   # every email; no website line (better for spam filters)
 LINKEDIN_URL = "linkedin.com/in/uxamayousaf"
 CALENDLY_URL = "https://calendly.com/vogentlabs"
 LINKEDIN_IN_FIRST_EMAIL_AFTER_DAYS = 14   # first email gets the LinkedIn link once warm-up is done
@@ -153,6 +153,19 @@ def eligible(l):
 GROWING = set()                          # companies posting 2+ matching roles today
 
 
+NONPROFIT_IND = re.compile(r"non-?profit|philanthrop|civic|social organization|government|public policy|"
+                           r"religious|fund-?raising|museums?|libraries", re.I)
+NONPROFIT_NAME = re.compile(r"\b(foundation|council|association|society|charity|charitable|institute|"
+                            r"federation|ministries|church|alliance)\b", re.I)
+
+
+def is_nonprofit(l):
+    """Nonprofits and public bodies rarely buy offshore staffing: ranked lower, never removed."""
+    site = str(l.get("website") or "").lower()
+    return bool(NONPROFIT_IND.search(str(l.get("industry") or "")) or NONPROFIT_NAME.search(str(l.get("company") or ""))
+                or re.search(r"\.org(?:\.[a-z]{2})?(?:/|$)", site))
+
+
 def rank_key(l):
     size_min = l.get("size_min")
     size_bucket = 3 if size_min is None else (0 if size_min <= 10 else (1 if size_min <= SMALL_COMPANY else 2))
@@ -163,7 +176,7 @@ def rank_key(l):
         newest = 0
     benefits = 1 if l.get("us_benefits") else 0          # full US payroll benefits = harder to convert
     growing = 0 if norm(l.get("company")) in GROWING else 1
-    return (size_bucket, growing, role_rank, WORK_ORDER.get(l.get("work_type"), 9), benefits,
+    return (size_bucket, 1 if is_nonprofit(l) else 0, growing, role_rank, WORK_ORDER.get(l.get("work_type"), 9), benefits,
             REGION_ORDER.get(l.get("region"), 9), newest)
 
 
@@ -489,9 +502,23 @@ def article(role):
 
 
 
+def is_emoji_char(ch):
+    """Emojis and picture symbols only; letters and normal punctuation like @ & . stay (same as find_leads.py)."""
+    o = ord(ch)
+    return unicodedata.category(ch) in ("So", "Cs") or 0xFE00 <= o <= 0xFE0F or o == 0x200D or 0x1F000 <= o <= 0x1FAFF
+
+
+def fix_case(name):
+    """'ALI' or 'ali' -> 'Ali'; names already in normal case stay as they are ('McKenzie')."""
+    name = str(name or "").strip()
+    if name and (name.isupper() or name.islower()):
+        return "-".join(part.capitalize() for part in name.split("-"))
+    return name
+
+
 def clean_company(name):
     """Company name for messages: drops emojis and decorative symbols (same as find_leads.py)."""
-    out = re.sub(r"[^\w\s&'.,()+\-/]", "", str(name or ""), flags=re.UNICODE)
+    out = "".join(ch for ch in str(name or "") if not is_emoji_char(ch))
     return re.sub(r"\s{2,}", " ", out).strip() or str(name or "").strip()
 
 
@@ -531,16 +558,46 @@ DEFAULT_SKILLS = {
 }
 
 
+# Words that belong to each field, so a Bookkeeper's hook never says "returns and refunds"
+SKILL_FIELD = {
+    "CRM Automation": r"crm|hubspot|highlevel|ghl|zapier|\bmake\b|automation|workflow|pipeline|funnel|salesforce|"
+                      r"zoho|keap|activecampaign|pipedrive|\bsms\b|email",
+    "SEO": r"seo|keyword|backlink|link build|search console|ahrefs|semrush|on-page|technical|content|analytics|\bga4\b",
+    "Performance Marketing": r"\bads\b|ppc|google|meta|facebook|tiktok|\bga4\b|analytics|conversion|campaign|"
+                             r"bidding|roas|\bsem\b|tracking|media",
+    "Customer Service": r"support|ticket|zendesk|freshdesk|gorgias|intercom|chat|phone|returns|refunds|order|"
+                        r"customer|crm|help|shopify",
+    "Bookkeeping": r"quickbooks|xero|invoic|payable|receivable|reconcil|payroll|month-end|financial|ledger|"
+                   r"billing|\btax\b|accounting|sage|netsuite|expense|excel",
+    "Lead Generation": r"\blead|prospect|apollo|linkedin|sales navigator|cold|outreach|appointment|crm|\blist|email",
+    "Social Media": r"social|instagram|tiktok|facebook|linkedin|content|canva|community|reels|\bugc\b|analytics|"
+                    r"copywriting|video",
+    "Content Writing": r"writ|copy|blog|seo|content|\bedit|proofread|wordpress|newsletter",
+    "Email Marketing": r"email|klaviyo|mailchimp|flows|automation|segmentation|newsletter|copy|campaign|hubspot",
+    "Design & Video": r"photoshop|illustrator|figma|canva|after effects|premiere|video|motion|design|brand|\b3d\b|"
+                      r"blender|landing page|\bui\b|\bux\b|indesign|editing|animation",
+    "Website Support": r"wordpress|shopify|webflow|wix|squarespace|html|css|landing page|\bsite\b|elementor|seo|"
+                       r"javascript|php",
+    "Virtual Assistant": r"calendar|inbox|email|data entry|scheduling|travel|admin|crm|google workspace|excel",
+}
+
+
 def skill_list(lead):
-    """Ordered skills for messages: tools first, specific tasks next, vague words last (dropped if 2+ better)."""
+    """Skills for messages: the role's own field first (tools first), role-typical skills fill any gap,
+    vague words last. The Leads tab keeps the full list as found."""
     raw = [x.strip() for x in str(lead.get("skills") or "").split(" · ") if x.strip()]
-    tools = [x for x in raw if any(ch.isupper() for ch in x) and x.lower() not in GENERIC_SKILLS]
-    tasks = [x for x in raw if x not in tools and x.lower() not in GENERIC_SKILLS]
-    vague = [x for x in raw if x.lower() in GENERIC_SKILLS]
-    good = tools + tasks
-    if not good:                                    # nothing specific in the post: role-typical skills
-        return list(DEFAULT_SKILLS.get(lead.get("category"), vague))
-    return good if len(good) >= 2 else good + vague
+    cat = lead.get("category")
+    field = re.compile(SKILL_FIELD[cat], re.I) if cat in SKILL_FIELD else None
+    generic = lambda x: x.lower() in GENERIC_SKILLS
+    tools_first = lambda xs: [x for x in xs if any(ch.isupper() for ch in x)] + \
+        [x for x in xs if not any(ch.isupper() for ch in x)]
+    own = tools_first([x for x in raw if not generic(x) and (field is None or field.search(x))])
+    if field is not None and len(own) < 2:                       # top up with role-typical skills, after the post's own
+        own += [d for d in DEFAULT_SKILLS.get(cat, []) if d.lower() not in {x.lower() for x in own}]
+    if not own:
+        own = tools_first([x for x in raw if not generic(x)]) or list(DEFAULT_SKILLS.get(cat, [])) or \
+            [x for x in raw if generic(x)]
+    return own
 
 
 def join_skills(skills):
@@ -555,6 +612,7 @@ def skill_text(lead):
 
 def linkedin_messages(lead, first):
     """DM after accept, Follow-up 1, Follow-up 2 (one universal sequence for every role)."""
+    first = fix_case(first)
     role, company = msg_role(lead), clean_company(lead["company"])
     skills = skill_list(lead)
     sk3 = join_skills(skills[:3])
@@ -578,6 +636,7 @@ def linkedin_messages(lead, first):
 
 
 def named_note(note, first):
+    first = fix_case(first)
     if first and note.startswith("Hi,"):
         candidate = f"Hi {first}," + note[3:]
         if len(candidate) <= 200:                          # fits free and Premium LinkedIn accounts
@@ -598,7 +657,9 @@ BAD_LOCAL = ["noreply", "no-reply", "donotreply", "privacy", "legal", "abuse", "
              "delete", "remove", "request", "help", "dataprotection", "dpo", "optout", "opt-out",
              "clerk", "records", "regulatory", "accessibility", "submit",
              "unsubscribe", "billing", "invoice", "accounts", "example", "test", "user", "email", "name",
-             "yourname", "press", "media", "dmca", "security", "compliance", "gdpr"]
+             "yourname", "press", "media", "dmca", "security", "compliance", "gdpr",
+             "enroll", "admission", "orders", "booking", "reservation", "donate", "donation", "membership",
+             "members", "events"]
 BAD_DOMAIN = ["example.com", "domain.com", "sentry", "wixpress", "godaddy", "squarespace", "wordpress",
               "email.com", "yourdomain", "company.com", "mysite", "schema.org", "w3.org"]
 HIRING_LOCAL = ["careers", "career", "jobs", "job", "hr", "hiring", "recruit", "talent", "people", "work",
@@ -694,6 +755,7 @@ def _old_email_cap(today):
 
 
 def greeting(email, kind, company, first=""):
+    first = fix_case(first)
     if first:
         return f"Hi {first},"
     local = email.split("@")[0]
@@ -726,20 +788,20 @@ def build_email(lead, email, kind, first=""):
              f"I run Vogent Labs, where we help businesses hire dedicated remote professionals. {fit}\n\n"
              f"We handle the staffing and payroll on our end, so you can focus on getting the right person "
              f"into your team.\n\nWould you be open to reviewing a couple of profiles?\n\n"
-             f"Best,\n{SENDER_FIRST}\n{SENDER_TITLE}\n{SENDER_SITE}")
+             f"Best,\n{SIGNATURE}")
     pros = (f"a couple of remote professionals with experience in {skills}" if skills
             else "a couple of remote professionals who could be a fit")
     fu1 = (f"{hi}\n\nWanted to follow up on my note about the {role} position.\n\n"
            f"If you're still reviewing candidates, happy to share {pros}, at a much lower cost than a local "
-           f"hire.\n\nWould that be useful?\n\nBest,\n{SENDER_FIRST}")
+           f"hire.\n\nWould that be useful?\n\nBest,\n{SIGNATURE}")
     fu2 = (f"{hi}\n\nNot sure if you've filled the {role} position yet.\n\n"
            f"At Vogent Labs, we help companies bring on dedicated remote talent while managing the staffing and "
            f"payroll on our side.\n\nIf you're still exploring options, I'd be happy to share some relevant "
            f"profiles. Or if a quick call is easier, you can pick a time here: {CALENDLY_URL}\n\n"
-           f"Best,\n{SENDER_FIRST}")
+           f"Best,\n{SIGNATURE}")
     fu3 = (f"{hi}\n\nI'll leave it here for now.\n\nIf the {role} position is still open, happy to share a "
            f"couple of candidates. And if you've already hired, perhaps we can connect for future openings.\n\n"
-           f"All the best with the search!\n\n{SENDER_FIRST}")
+           f"All the best with the search!\n\n{SIGNATURE}")
     subject = subject[:1].upper() + subject[1:]
     return subject, body1, [fu1, fu2, fu3], variant
 
