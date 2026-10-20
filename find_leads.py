@@ -674,7 +674,7 @@ def join_words(items):
     return items[0] if len(items) == 1 else ", ".join(items[:-1]) + " and " + items[-1]
 
 
-NOTE_LIMIT = 200   # LinkedIn's limit for notes on free accounts (300 on Premium), so it fits either way
+NOTE_LIMIT = 300   # LinkedIn Premium allows 300 characters in a connection note
 
 
 def connection_note(company, role, category, skills, work):
@@ -689,7 +689,8 @@ def connection_note(company, role, category, skills, work):
     else:
         a_role = ("an " if role[:1].lower() in "aeiou" else "a ") + role
     company = clean_company(company)
-    tail = " Curious how the search is going. Thought it'd be good to connect!"
+    tail = (" Curious, have you found the right person out of the applicants yet, or still going through them?"
+            " Thought it'd be good to connect!")
     note = f"Hi, noticed {company} is hiring for {a_role}.{tail}"
     if len(note) + 25 > NOTE_LIMIT:                            # room for a first name added later
         note = f"Hi, noticed you're hiring for {a_role}.{tail}"   # very long company names
@@ -848,11 +849,17 @@ REMOTE_FILTER_IDS = set()        # jobs LinkedIn returned for its Remote filter 
 
 def load_pool():
     """Available candidates per role, counted by the Sheet from the candidate sheet (numbers only)."""
-    try:
-        r = requests.post(WEBAPP_URL, json={"token": TOKEN, "action": "role_stats", "days": 7}, timeout=120)
-        POOL.update(json.loads(r.text).get("pool", {}))
-    except Exception as e:
-        print("Pool counts not available, normal search:", e)
+    for attempt in range(3):                     # up to 3 tries, so a short hiccup never causes a full search
+        try:
+            r = requests.post(WEBAPP_URL, json={"token": TOKEN, "action": "role_stats", "days": 7}, timeout=120)
+            pool = json.loads(r.text).get("pool", {})
+            if pool:
+                POOL.update(pool)
+                return
+        except Exception as e:
+            print(f"Pool counts try {attempt + 1} failed:", e)
+        time.sleep(10 * (attempt + 1))
+    print("Pool counts not available, normal search")
 
 
 def light_search(cat_name):
