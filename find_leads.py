@@ -557,13 +557,13 @@ REMOTE_WORDS = ["remote", "work from home", "work-from-home", "wfh", "work from 
                 "fully distributed", "distributed team", "telecommute", "telecommuting"]
 
 
-def decide_work(row, title, desc, page_tag=""):
+def decide_work(row, title, desc, page_tag="", remote_hit=False):
     """Work type from LinkedIn's own tag on the job page first (the Remote / Hybrid / On-site you see on LinkedIn).
     Appearing in LinkedIn's Remote search filter is NOT proof: that filter also returns office jobs.
       - page says On-site / Hybrid -> On-site / Hybrid (even if the text mentions remote)
       - page says Remote, or LinkedIn's location field says Remote -> Remote
-      - page unreadable: Remote only when the location AND the description both clearly say remote,
-        otherwise 'Not confirmed' (kept in the Leads tab, never sent to outreach)"""
+      - page unreadable: Remote only when LinkedIn's Remote filter returned the job AND the description
+        itself says remote (two independent signals). One signal alone -> 'Not confirmed' (Leads tab only)."""
     if page_tag in ("On-site", "Hybrid"):
         return page_tag
     loc_remote = "remote" in text(row.get("location")).lower()
@@ -571,18 +571,24 @@ def decide_work(row, title, desc, page_tag=""):
         return "Remote"
     d = (title + " " + desc).lower()
     on = any(p in d for p in STRONG_ONSITE) or bool(STRONG_ONSITE_RE.search(d))
-    hy = any(p in d for p in STRONG_HYBRID)
     rem = any(p in d for p in STRONG_REMOTE)
+    hy = any(p in d for p in STRONG_HYBRID) or (bool(re.search(r"\bhybrid\b", d)) and not rem) or \
+        bool(re.search(r"\d\s*days?\s*(?:a|per)?\s*(?:week\s*)?(?:in|at|from)\s*(?:the|our)?\s*office", d))
     if on:
         return "On-site"
     if hy:
         return "Hybrid"
-    if rem or any(w in d for w in REMOTE_WORDS):
+    says_remote = rem or any(w in d for w in REMOTE_WORDS)
+    if remote_hit and says_remote:
+        return "Remote"
+    if says_remote or remote_hit:
         return "Not confirmed"
     return "Not stated"
 
 
 PAGE_TAG_CACHE = {}
+PAGE_STATS = {"tries": 0, "found": 0, "status": {}}
+PAGE_GIVE_UP_AFTER = 15          # if the first 15 pages show no tag, LinkedIn is hiding it: stop trying today
 
 
 def page_workplace(job_id):
@@ -591,10 +597,14 @@ def page_workplace(job_id):
         return ""
     if job_id in PAGE_TAG_CACHE:
         return PAGE_TAG_CACHE[job_id]
+    if PAGE_STATS["tries"] >= PAGE_GIVE_UP_AFTER and PAGE_STATS["found"] == 0:
+        return ""
+    PAGE_STATS["tries"] += 1
     tag = ""
     # 1) the job's own card (only this job, no "similar jobs" list that could mislead)
     try:
         r = requests.get(f"https://www.linkedin.com/jobs-guest/jobs/api/jobPosting/{job_id}", headers=UA, timeout=20)
+        PAGE_STATS["status"][r.status_code] = PAGE_STATS["status"].get(r.status_code, 0) + 1
         if r.status_code == 200:
             h = r.text
             m = re.search(r'(?i)(?:workplace_?types?|formattedWorkplaceType|workplaceType)\W{1,40}?'
@@ -623,6 +633,8 @@ def page_workplace(job_id):
             pass
         time.sleep(1.2)
     tag = {"remote": "Remote", "hybrid": "Hybrid"}.get(tag.lower(), "On-site" if tag else "")
+    if tag:
+        PAGE_STATS["found"] += 1
     PAGE_TAG_CACHE[job_id] = tag
     return tag
 
@@ -831,6 +843,7 @@ def search(term, n, location, remote=False):
 
 
 POOL = {}
+REMOTE_FILTER_IDS = set()        # jobs LinkedIn returned for its Remote filter (one signal, not proof on its own)
 
 
 def load_pool():
@@ -881,6 +894,8 @@ def main():
             for location, short in rcfg["locations"]:
                 for term, n, remote_pass in [(t, k, rp) for t, k in terms for rp in (True, False)]:
                     df = search(term, n, location, remote_pass)
+                    if remote_pass and df is not None and len(df):
+                        REMOTE_FILTER_IDS.update(job_id_of(r) for _, r in df.iterrows())
                     if df is None or not len(df):
                         continue
                     for _, row in df.iterrows():
@@ -938,7 +953,8 @@ def main():
                         wt_checked.add(key)
                         if page_tag:
                             wt_confirmed.add(key)
-                        wtype = decide_work(row, title, desc, page_tag)
+                        wtype = decide_work(row, title, desc, page_tag,
+                                            remote_pass or job_id_of(row) in REMOTE_FILTER_IDS)
                         companies_today.add(co_key)
                         found[key] = {
                             "id": key,
@@ -976,7 +992,8 @@ def main():
     print(f"\nChecked {len(checked)} | agencies {len(ex_agency)} | big {len(ex_big)} | "
           f"non-English {len(ex_lang)} | location-locked {len(ex_loc)} | incomplete {len(ex_incomplete)} | "
           f"senior {len(ex_senior)} | wrong role {len(ex_role)} | "
-          f"work type read from LinkedIn {len(wt_confirmed)}/{len(wt_checked)} | "
+          f"work type read from LinkedIn {len(wt_confirmed)}/{len(wt_checked)} "
+          f"(page answers {PAGE_STATS['status']}) | "
           f"matches {len(leads)}")
 
     # Hand today's leads to the Phase 2 outreach step (GitHub passes this file along)
