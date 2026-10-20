@@ -422,6 +422,18 @@ def commission_heavy(desc):
 UPWORK_STATS = {"checked": 0, "named": 0, "new": 0}
 
 
+def upwork_link(it):
+    """The job's Upwork link. Some results come without one: then an Upwork search for that exact title,
+    so the row is never dropped by the Sheet (it needs a link)."""
+    link = str(it.get("link") or it.get("url") or "")
+    if link.startswith("http"):
+        return link
+    cipher = str(it.get("ciphertext") or get_path(it, "data.opening.ciphertext", "") or "")
+    if cipher:
+        return "https://www.upwork.com/jobs/" + (cipher if cipher.startswith("~") else "~" + cipher)
+    return "https://www.upwork.com/nx/search/jobs/?q=" + requests.utils.quote(str(it.get("title") or "GoHighLevel"))
+
+
 def upwork_leads(today, start_rank):
     if not (UPWORK_ENABLED and APIFY_TOKEN):
         return []
@@ -455,7 +467,7 @@ def upwork_leads(today, start_rank):
         d = desc.lower()
         skills = [n for n, words in GHL_SKILLS if any(w in d for w in words)][:3]
         leads.append({"company": name, "region": region, "size": str(int(size)) if isinstance(size, (int, float)) else "Unknown",
-                      "title": str(it.get("title") or "GoHighLevel role"), "url": str(it.get("link") or ""),
+                      "title": str(it.get("title") or "GoHighLevel role"), "url": upwork_link(it),
                       "skills": skills, "keyword": proposal_keyword(desc), "desc": desc})
     print(f"Upwork: {len(items)} GHL jobs checked, {len(leads)} with a named client")
     UPWORK_STATS.update({"checked": len(items), "named": len(leads)})
@@ -621,8 +633,8 @@ def linkedin_messages(lead, first):
     who = (f"We work with remote professionals experienced in {sk3}." if sk3
            else "We work with remote professionals who do this kind of work every day.")
     dm = (f"Thanks for connecting, {first}!" if first else "Thanks for connecting!") + \
-        (f" Saw your {role} opening at {company}. {who} Curious, have you found the right person out of the "
-         f"applicants yet, or still going through them?")
+        (f" Saw your {role} opening at {company}. {who} Would it help to see a couple of profiles that match "
+         f"your post?")
     if len(skills) >= 2:
         hard = f"finding someone strong in both {skills[0]} and {skills[1]} is not easy"
     elif skills:
@@ -641,7 +653,7 @@ def named_note(note, first):
     first = fix_case(first)
     if first and note.startswith("Hi,"):
         candidate = f"Hi {first}," + note[3:]
-        if len(candidate) <= 200:                          # fits free and Premium LinkedIn accounts
+        if len(candidate) <= 300:                          # LinkedIn Premium limit
             return candidate
     return note
 
@@ -661,7 +673,7 @@ BAD_LOCAL = ["noreply", "no-reply", "donotreply", "privacy", "legal", "abuse", "
              "unsubscribe", "billing", "invoice", "accounts", "example", "test", "user", "email", "name",
              "yourname", "press", "media", "dmca", "security", "compliance", "gdpr",
              "enroll", "admission", "orders", "booking", "reservation", "donate", "donation", "membership",
-             "members", "events"]
+             "members", "events", "bug", "training", "learning", "course", "academy"]
 BAD_DOMAIN = ["example.com", "domain.com", "sentry", "wixpress", "godaddy", "squarespace", "wordpress",
               "email.com", "yourdomain", "company.com", "mysite", "schema.org", "w3.org"]
 HIRING_LOCAL = ["careers", "career", "jobs", "job", "hr", "hiring", "recruit", "talent", "people", "work",
