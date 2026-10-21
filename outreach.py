@@ -334,8 +334,10 @@ def _old_linkedin_company_url(company):
 UPWORK_ENABLED = True
 UPWORK_ACTOR = "flash_mage~upwork"
 UPWORK_QUERIES = ["GoHighLevel", "HighLevel", "GHL"]
-UPWORK_LIMIT = 80                        # newest GHL jobs checked per day (about $0.25); Upwork is where GHL jobs are
-UPWORK_COST_CAP_USD = 0.26
+UPWORK_LIMIT = 95                        # newest GHL jobs checked per day (about $0.30, the whole Apify budget)
+UPWORK_COST_CAP_USD = 0.30
+UPWORK_RECONTACT_DAYS = 30               # a past Upwork client posting a NEW GHL job after 30+ days is contacted again
+FOUNDER_LOOKUP = False                   # paid founder search off: you find founders on LinkedIn ("Find founder" link)
 GHL_SKILLS = [("funnels", ["funnel"]), ("workflows", ["workflow", "automation"]), ("pipelines", ["pipeline"]),
               ("SMS follow-ups", ["sms", "text follow"]), ("email campaigns", ["email marketing", "email campaign",
               "email sequence", "newsletter"]), ("calendars", ["calendar", "appointment"]),
@@ -485,6 +487,32 @@ def upwork_proposal(lead, first):
             f"lower cost than a local hire. We handle everything on our side, so it stays hassle free for you.\n\n"
             f"Quick question so I can match the right person: what is the one thing this hire must get right in the "
             f"first 30 days?\n\nUsama")
+
+
+def upwork_messages(lead, first):
+    """Upwork clients are contacted on LinkedIn, so they get the same sequence as LinkedIn rows,
+    written for GoHighLevel: connection note, DM after accept, follow-up 1, follow-up 2."""
+    first = fix_case(first)
+    company = clean_company(lead["company"])
+    skills = [x for x in lead.get("skills") or [] if x]
+    note = (f"Hi {first}, " if first else "Hi, ") + (
+        f"noticed {company} is hiring for GoHighLevel help. Curious, have you found the right person out of the "
+        f"applicants yet, or still going through them? Thought it'd be good to connect!")
+    if len(note) > 300:
+        note = note[:297].rsplit(" ", 1)[0] + "..."
+    sk = join_skills(skills[:3])
+    who = (f"We work with remote professionals experienced in GoHighLevel, {sk}." if sk
+           else "We work with remote GoHighLevel specialists who do this work every day.")
+    dm = (f"Thanks for connecting, {first}!" if first else "Thanks for connecting!") + \
+        f" Saw your GoHighLevel opening at {company}. {who} Would it help to see a couple of profiles that match your post?"
+    hard = (f"finding someone strong in both GoHighLevel and {skills[0]} is not easy" if skills
+            else "finding a strong GoHighLevel specialist is not easy")
+    fu1 = (f"{'Hi ' + first if first else 'Hi'}, {hard}, which is why I reached out. I run Vogent Labs, where we "
+           f"help businesses hire dedicated remote professionals at a much lower cost than a local hire. "
+           f"Happy to share a couple of profiles that match your GoHighLevel post if useful.")
+    fu2 = (f"{'Hey ' + first if first else 'Hi'}, checking back on the GoHighLevel opening. If you're still hiring, "
+           f"I'd be happy to share a couple of relevant profiles. If you've already filled it, no worries at all!")
+    return [note, dm, fu1, fu2]
 
 
 def upwork_note(lead, first):
@@ -1003,7 +1031,7 @@ def main():
     left = APIFY_DAILY_BUDGET_USD - upwork_spent
     missing = [r for r in rows if r["channel"] == "LinkedIn" and r["dm_name"] == "Find founder ↗"
                and slug(r.get("company_url"))]
-    if missing and left >= 0.06:
+    if FOUNDER_LOOKUP and missing and left >= 0.06:
         hits = match_people([r["_lead"] for r in missing],
                             apify_people(sorted({r["company_url"] for r in missing}), budget=left))
         for r in missing:
@@ -1021,7 +1049,8 @@ def main():
 
     # ----- Upwork GHL leads with a named client (searched at the start) -----
     if up:
-        reply = post({"action": "outreach_check", "companies": [norm(u["company"]) for u in up]})
+        reply = post({"action": "outreach_check", "companies": [norm(u["company"]) for u in up],
+                      "recontact_days": UPWORK_RECONTACT_DAYS})
         try:
             new_up = set(json.loads(reply).get("new", []))
         except Exception:
@@ -1032,6 +1061,7 @@ def main():
         for u in fresh_up:
             p = free_founder(u["company"])
             first = p["first"] if p else ""
+            up_msgs = upwork_messages(u, first)
             rows.append({
                 "key": norm(u["company"]),
                 "date": today.strftime("%Y-%m-%d"),
@@ -1048,10 +1078,11 @@ def main():
                 "dm_url": p["url"] if p else founder_search_url(u["company"]),
                 "dm_title": p["title"] if p else "",
                 "email": "",
-                "note": upwork_note(u, first),          # LinkedIn note (Message 1)
-                "followup": upwork_proposal(u, first),  # Upwork proposal draft (Message 2)
-                "messages": [upwork_note(u, first), upwork_proposal(u, first), "", ""],
+                "note": up_msgs[0],                     # LinkedIn connection note (Message 1)
+                "followup": up_msgs[1],                 # DM after accept (Message 2)
+                "messages": up_msgs,                    # note, DM, follow-up 1, follow-up 2 (same as LinkedIn)
                 "email_status": "",
+                "recontact_days": UPWORK_RECONTACT_DAYS,
             })
 
     print("Sheet response:", post({"action": "outreach_add", "rows": rows,
