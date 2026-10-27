@@ -31,18 +31,14 @@ DetectorFactory.seed = 0
 # posted on Friday (US business hours, after Friday's run) still reach Monday's outreach.
 PKT = dt.timezone(dt.timedelta(hours=5))
 HOURS_OLD = 72 if dt.datetime.now(PKT).weekday() == 0 else 48
-MAX_EMPLOYEES = 200     # companies bigger than this are skipped (unknown size is kept)
+MAX_EMPLOYEES = 50      # founder-led small companies only (unknown size is kept, ranked last)
 
 # rank = order in your sheet. scale = fewer results per search for smaller markets.
 # Each location: (LinkedIn search location, short name shown in sheet)
 REGIONS = {
-    "USA / Canada": {"enabled": True, "rank": 1, "scale": 1.0, "locations": [
-        ("United States", "USA"), ("Canada", "Canada"),
-    ]},
-    "UK": {"enabled": True, "rank": 2, "scale": 0.8, "locations": [
-        ("United Kingdom", "UK"),
-    ]},
+    "USA": {"enabled": True, "rank": 1, "scale": 1.0, "locations": [("United States", "USA")]},
 }
+SITES = ["linkedin", "indeed", "zip_recruiter"]       # same search on all three job sites
 
 GHL_TERMS = ["go high level", "highlevel", "high level crm", "ghl", "lead connector"]
 REAL_ESTATE_WORDS = ["real estate", "realty", "realtor", "properties", "homes", "property management"]
@@ -87,7 +83,7 @@ CATEGORIES = {
     "SEO": {
         # US / UK clients only, so it is searched in those two region groups
         "enabled": True, "deep_results": 80, "normal_results": 40,
-        "regions": ["USA / Canada", "UK"],
+        "regions": ["USA"],
         "deep_searches": ["SEO Specialist", "SEO Manager"],
         "searches": [
             "SEO Analyst", "SEO Strategist", "Technical SEO", "Local SEO", "SEO Executive",
@@ -182,9 +178,11 @@ CATEGORIES = {
     },
     "Website Support": {
         "enabled": True, "deep_results": 60, "normal_results": 30,
-        "deep_searches": ["WordPress Developer", "Shopify Specialist"],
-        "searches": ["Webflow Developer", "Website Coordinator", "Website Assistant", "Shopify Developer"],
-        "must_mention": ["wordpress", "shopify", "webflow", "elementor", "squarespace", "wix", "website updates"],
+        "deep_searches": ["WordPress Developer", "Shopify Specialist", "Web Developer"],
+        "searches": ["Webflow Developer", "Website Coordinator", "Website Assistant", "Shopify Developer",
+                     "Front End Developer", "App Developer"],
+        "must_mention": ["wordpress", "shopify", "webflow", "elementor", "squarespace", "wix", "website updates",
+                         "web develop", "front end", "front-end", "react", "javascript", "app develop"],
     },
     "Customer Service": {
         "enabled": True, "deep_results": 80, "normal_results": 30,
@@ -327,7 +325,21 @@ STRONG_ONSITE_RE = re.compile(r"\b(?:on[- ]?site|in[- ]office|in[- ]person)\b[^.
                               r"|\b(?:role|position|job) is (?:fully |100% )?(?:on[- ]?site|in[- ]office|in[- ]person)\b", re.I)
 STRONG_HYBRID = ["hybrid role", "hybrid position", "hybrid schedule", "hybrid work", "this is a hybrid"]
 STRONG_REMOTE = ["fully remote", "100% remote", "remote position", "remote role", "work from anywhere",
-                 "remote-first", "this is a remote", "remote opportunity", "work remotely"]
+                 "remote-first", "this is a remote", "remote opportunity", "work remotely", "remote job",
+                 "fully-remote", "remote-only", "completely remote", "remote work from home"]
+# Strongest offshore signal: the employer is open to people outside the US
+WORLDWIDE_RE = re.compile(r"work from anywhere|anywhere in the world|worldwide|world-wide|international "
+                          r"(?:candidates|applicants|contractors|talent)|global(?:ly)? (?:remote|team|talent)|"
+                          r"any time ?zone|all time ?zones|independent contractor|\b1099\b|contract(?:or)? basis|"
+                          r"\basync(?:hronous)?\b|offshore|overseas", re.I)
+# Hard local requirements: the job cannot be done from Pakistan
+HARD_LOCAL_RE = re.compile(r"\bw-?2 (?:only|employee|employment|position|role)\b|"
+                           r"must be (?:a )?(?:u\.?s\.?|united states|us) citizen|"
+                           r"(?:u\.?s\.?|us) citizenship (?:is )?required|security clearance|"
+                           r"must (?:live|reside|be located|be based) (?:in|within|near)|local (?:candidates|applicants) only|"
+                           r"must hold an? (?:active |valid )?(?:insurance|real estate|nursing|cpa|state) licen[sc]e", re.I)
+HARD_LOCAL_TITLE_RE = re.compile(r"\b(?:us|u\.s\.|usa|uk|canada)[- ]based\b|\blicensed\b|\bhotel\b|"
+                                 r"guest (?:experience|service|services)|front desk|concierge", re.I)
 ONSITE_PHRASES = [
     "on-site", "onsite", "on site", "in office", "in-office", "in person",
     "in-person", "must be able to commute", "must reside within",
@@ -496,7 +508,7 @@ ROLE_FIT = {
     "Bookkeeping": r"bookkeep|account|fiscal|financ|revenue|receivabl|payabl|payroll|billing|treasur|\btax\b|"
                    r"quickbooks|xero|reconcil|invoic|ledger|\bap\b|\bar\b",
     "Virtual Assistant": r"assistant|virtual|admin|secretar|data entry|clerk|office (?:coordinator|manager)|"
-                         r"operations (?:coordinator|associate)|scheduler|dispatch|coordinator",
+                         r"operations (?:coordinator|associate)|scheduler|dispatch|admin(?:istrative)? coordinator",
     "Lead Generation": r"lead gen|appointment|setter|cold call|outbound|prospect|lead research|list build|"
                        r"data research|\bbdc\b|telemarket|telesales|scheduler|sales (?:assistant|coordinator|support)|" + MARKETING_GENERAL,
     "Social Media": r"social|community (?:manager|coordinator|specialist)|community (?:&|and) engagement|content creator|"
@@ -509,6 +521,9 @@ ROLE_FIT = {
                        r"html|e[- ]?commerce",
 }
 ROLE_FIT_RE = {k: re.compile(v, re.I) for k, v in ROLE_FIT.items()}
+# Extra outsourceable work not covered above (automation, CRM, developers)
+ANY_FIT_RE = re.compile(r"automation|\bcrm\b|hubspot|highlevel|\bghl\b|zapier|n8n|developer|\bai\b|"
+                        r"chatbot|operations (?:assistant|coordinator|specialist)|project coordinator|recruit(?:ing|ment) coordinator", re.I)
 # Never our kind of hire, whatever the category
 NOT_STAFFABLE_RE = re.compile(r"\b(analyst|reporter|journalist|technician)\b", re.I)
 
@@ -524,8 +539,10 @@ def wrong_title(title, category, desc=""):
         return not (CRM_TITLE_RE.search(title) or GHL_RE.search(title + " " + desc))
     if NOT_STAFFABLE_RE.search(title) and not re.search(r"customer", title, re.I):
         return True
-    fit = ROLE_FIT_RE.get(category)
-    return bool(fit) and not fit.search(title)
+    if HARD_LOCAL_TITLE_RE.search(title):
+        return True
+    # Any work that can be done from Pakistan counts, whichever search found it
+    return not (any(r.search(title) for r in ROLE_FIT_RE.values()) or ANY_FIT_RE.search(title))
 
 
 def crm_manager_title(title, category):
@@ -558,27 +575,27 @@ REMOTE_WORDS = ["remote", "work from home", "work-from-home", "wfh", "work from 
 
 
 def decide_work(row, title, desc, page_tag="", remote_hit=False):
-    """Work type from LinkedIn's own tag on the job page first (the Remote / Hybrid / On-site you see on LinkedIn).
-    Appearing in LinkedIn's Remote search filter is NOT proof: that filter also returns office jobs.
-      - page says On-site / Hybrid -> On-site / Hybrid (even if the text mentions remote)
-      - page says Remote, or LinkedIn's location field says Remote -> Remote
-      - page unreadable: Remote only when LinkedIn's Remote filter returned the job AND the description
-        itself says remote (two independent signals). One signal alone -> 'Not confirmed' (Leads tab only)."""
+    """Work type. Office or hybrid wording always wins (never pitched).
+    Remote when ANY of these is true (and no office / hybrid wording):
+      LinkedIn's own tag says Remote, the job location says Remote, the title says Remote,
+      the description uses a clear remote phrase, or the site's Remote filter returned it AND the text mentions remote.
+    One vague signal alone -> 'Not confirmed' (Leads tab only, never pitched)."""
     if page_tag in ("On-site", "Hybrid"):
         return page_tag
-    loc_remote = "remote" in text(row.get("location")).lower()
-    if page_tag == "Remote" or loc_remote:
-        return "Remote"
     d = (title + " " + desc).lower()
-    on = any(p in d for p in STRONG_ONSITE) or bool(STRONG_ONSITE_RE.search(d))
     rem = any(p in d for p in STRONG_REMOTE)
+    on = any(p in d for p in STRONG_ONSITE) or bool(STRONG_ONSITE_RE.search(d))
     hy = any(p in d for p in STRONG_HYBRID) or (bool(re.search(r"\bhybrid\b", d)) and not rem) or \
         bool(re.search(r"\d\s*days?\s*(?:a|per)?\s*(?:week\s*)?(?:in|at|from)\s*(?:the|our)?\s*office", d))
-    if on:
-        return "On-site"
     if hy:
         return "Hybrid"
-    says_remote = rem or any(w in d for w in REMOTE_WORDS)
+    if on and not rem:
+        return "On-site"
+    loc_remote = "remote" in text(row.get("location")).lower() or str(row.get("is_remote")).lower() == "true" \
+        and text(row.get("site")) != "linkedin"
+    if page_tag == "Remote" or loc_remote or "remote" in title.lower() or rem:
+        return "Remote"
+    says_remote = any(w in d for w in REMOTE_WORDS)
     if remote_hit and says_remote:
         return "Remote"
     if says_remote or remote_hit:
@@ -721,6 +738,7 @@ def parse_size(raw):
 
 
 PEOPLE_CACHE = {}
+STAFF_COUNT = {}                 # people on LinkedIn for the company (splits 11-50 into 11-20 and 21-50)
 
 
 def company_people(html):
@@ -758,6 +776,10 @@ def company_size(company_url, row):
             label, mn = parse_size(m.group(1)) if m else ("Unknown", None)
             result = (label, mn, ind.group(1).strip() if ind else "", company_website(r.text))
             PEOPLE_CACHE[url] = company_people(r.text)
+            cnt = re.search(r"(?:See all|View all)\s+([\d,]+)\s+employees", plain, re.I) or \
+                re.search(r"([\d,]+)\s+employees on LinkedIn", plain, re.I)
+            if cnt:
+                STAFF_COUNT[url] = int(cnt.group(1).replace(",", ""))
     except Exception:
         pass
     SIZE_CACHE[url] = result
@@ -802,8 +824,13 @@ def badge_map(term, location, pages=3):
 
 
 def job_id_of(row):
-    m = re.search(r"/jobs/view/(\d+)", text(row.get("job_url"))) or re.search(r"(\d{6,})", text(row.get("id")))
-    return m.group(1) if m else ""
+    m = re.search(r"/jobs/view/(\d+)", text(row.get("job_url")))
+    if m:
+        return m.group(1)
+    if text(row.get("site")) == "linkedin":
+        m = re.search(r"(\d{6,})", text(row.get("id")))
+        return m.group(1) if m else ""
+    return text(row.get("site")) + ":" + (text(row.get("id")) or text(row.get("job_url")))
 
 
 def company_website(html):
@@ -824,52 +851,37 @@ def company_website(html):
 
 
 def search(term, n, location, remote=False):
-    try:
-        df = scrape_jobs(
-            site_name=["linkedin"],
-            search_term=term,
-            location=location,
-            results_wanted=n,
-            hours_old=HOURS_OLD,
-            is_remote=remote,              # True = LinkedIn's own "Remote" filter
-            linkedin_fetch_description=True,
-        )
-        print(f"  {term} | {location}{' | remote filter' if remote else ''}: {len(df)} jobs")
-        return df
-    except Exception as e:
-        print(f"  {term} | {location}: failed ({e})")
+    """Same search on LinkedIn, Indeed and ZipRecruiter (USA). Each site on its own, so one failing site
+    never stops the others."""
+    frames = []
+    for site in SITES:
+        try:
+            kw = dict(site_name=[site], search_term=term, location=location, results_wanted=n,
+                      hours_old=HOURS_OLD, is_remote=remote)
+            if site == "linkedin":
+                kw["linkedin_fetch_description"] = True
+            if site == "indeed":
+                kw["country_indeed"] = "USA"
+            df = scrape_jobs(**kw)
+            if df is not None and len(df):
+                df = df.copy()
+                df["site"] = site
+                frames.append(df)
+            print(f"  {site} | {term}{' | remote filter' if remote else ''}: {0 if df is None else len(df)} jobs")
+        except Exception as e:
+            print(f"  {site} | {term}: failed ({e})")
+        finally:
+            time.sleep(3)
+    if not frames:
         return None
-    finally:
-        time.sleep(4)
+    import pandas as pd
+    return pd.concat(frames, ignore_index=True)
 
 
-POOL = {}
 REMOTE_FILTER_IDS = set()        # jobs LinkedIn returned for its Remote filter (one signal, not proof on its own)
 
 
-def load_pool():
-    """Available candidates per role, counted by the Sheet from the candidate sheet (numbers only)."""
-    for attempt in range(3):                     # up to 3 tries, so a short hiccup never causes a full search
-        try:
-            r = requests.post(WEBAPP_URL, json={"token": TOKEN, "action": "role_stats", "days": 7}, timeout=120)
-            pool = json.loads(r.text).get("pool", {})
-            if pool:
-                POOL.update(pool)
-                return
-        except Exception as e:
-            print(f"Pool counts try {attempt + 1} failed:", e)
-        time.sleep(10 * (attempt + 1))
-    print("Pool counts not available, normal search")
-
-
-def light_search(cat_name):
-    """Roles with zero available candidates get a light search. Virtual Assistant keeps its normal search
-    (Leads tab only). If the pool could not be read, every role is searched normally."""
-    return bool(POOL) and cat_name != "Virtual Assistant" and int(POOL.get(cat_name, 0)) == 0
-
-
 def main():
-    load_pool()
     found = {}
     checked, ex_agency, ex_big, ex_lang, ex_incomplete, ex_loc = set(), set(), set(), set(), set(), set()
     ex_senior, ex_role = set(), set()                       # skip reasons, shown in the Run Log
@@ -893,10 +905,6 @@ def main():
             terms = [(t, deep_n) for t in cfg["deep_searches"] if not is_senior(t)] + \
                     [(t, normal_n) for t in cfg["searches"]
                      if not is_senior(t) or crm_manager_title(t, cat_name)]   # "Manager" only for CRM
-            if light_search(cat_name):
-                # no available candidates for this role: a quick look for the Leads tab only
-                terms = [(t, 15) for t in cfg["deep_searches"][:2]]
-                print(f"{cat_name}: no available candidates, light search")
 
             for location, short in rcfg["locations"]:
                 for term, n, remote_pass in [(t, k, rp) for t, k in terms for rp in (True, False)]:
@@ -937,8 +945,8 @@ def main():
                         if title_not_english(title) or not is_english(desc) or needs_other_language(desc):
                             ex_lang.add(key)
                             continue
-                        if location_locked(title, text(row.get("location")), desc):
-                            ex_loc.add(key)
+                        if location_locked(title, text(row.get("location")), desc) or HARD_LOCAL_RE.search(desc):
+                            ex_loc.add(key)                              # must live in the US, W-2, licensed...
                             continue
                         if is_agency(company, industry, desc):
                             ex_agency.add(key)
@@ -956,7 +964,7 @@ def main():
                         skills = key_skills(title, desc)
                         role = short_role(title)
                         # Work type: LinkedIn's own tags first, clear wording second
-                        page_tag = page_workplace(job_id_of(row))      # LinkedIn's own tag on the job page
+                        page_tag = page_workplace(job_id_of(row)) if text(row.get("site")) == "linkedin" else ""
                         wt_checked.add(key)
                         if page_tag:
                             wt_confirmed.add(key)
@@ -986,7 +994,10 @@ def main():
                             "industry": page_industry or industry,
                             "direct": not strict_agency(company, page_industry or industry, desc),
                             "us_benefits": us_benefits(desc),
-                            "website": website,
+                            "website": website or text(row.get("company_url_direct")),
+                            "worldwide": bool(WORLDWIDE_RE.search(desc)),
+                            "staff_count": STAFF_COUNT.get(company_url.rstrip("/")),
+                            "site": text(row.get("site")) or "linkedin",
                             "people": PEOPLE_CACHE.get(company_url.rstrip("/"), []),
                         }
 
