@@ -16,7 +16,7 @@ jobs:
         category: ["CRM Automation", "AI Automation", "SEO", "Performance Marketing", "Customer Service",
                    "Bookkeeping", "Virtual Assistant", "Lead Generation", "Social Media",
                    "Content Writing", "Email Marketing", "Design & Video", "Website Support"]
-        region: ["USA / Canada", "UK"]
+        region: ["USA"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
