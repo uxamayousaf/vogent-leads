@@ -105,6 +105,15 @@ def norm(s):
     return re.sub(r"[^a-z0-9]", "", str(s or "").lower())
 
 
+def co_key(name):
+    """One company, one row: 'Blueprint Manufacturing Co.' = 'Blueprint Manufacturing',
+    'A Full Renovation – Projects' = 'A Full Renovation'."""
+    n = re.split(r"\s+[–—|]\s+|\s+-\s+", str(name or ""))[0]
+    n = re.sub(r"[,.]?\s+(?:co|company|llc|inc|incorporated|ltd|limited|corp|corporation|group|pllc|lp|llp)\.?$",
+               "", n.strip(), flags=re.I)
+    return norm(n) or norm(name)
+
+
 def slug(url):
     m = re.search(r"linkedin\.com/company/([^/?#]+)", str(url or ""))
     return m.group(1).lower() if m else ""
@@ -145,6 +154,10 @@ def eligible(l):
     size_min = l.get("size_min")
     if size_min is not None and size_min > MAX_COMPANY_SIZE:
         return False
+    if is_nonprofit(l) or norm(l.get("company")) in ("confidential", "confidentialcompany", "stealth", "stealthstartup"):
+        return False                       # nonprofits, associations, credit unions, hidden company names
+    if size_min is None and not ("GHL" in str(l.get("priority") or "") or l.get("worldwide") or l.get("tiny_clue")):
+        return False                       # unknown size only with a strong signal (GHL, worldwide, tiny business)
     return all(str(l.get(k) or "").strip() for k in ("company", "title", "url"))
 
 
@@ -154,7 +167,8 @@ GROWING = set()                          # companies posting 2+ matching roles t
 NONPROFIT_IND = re.compile(r"non-?profit|philanthrop|civic|social organization|government|public policy|"
                            r"religious|fund-?raising|museums?|libraries", re.I)
 NONPROFIT_NAME = re.compile(r"\b(foundation|council|association|society|charity|charitable|institute|"
-                            r"federation|ministries|church|alliance)\b", re.I)
+                            r"federation|ministries|church|alliance|credit union)\b", re.I)
+UNKNOWN_SIZE_MAX = 10                    # unknown-size companies per day, and only with a strong signal
 
 
 def is_nonprofit(l):
@@ -872,7 +886,7 @@ def main():
         pass
     best_per_company = {}
     for l in sorted(leads, key=rank_key):
-        best_per_company.setdefault(norm(l["company"]), l)       # one row per company, best job
+        best_per_company.setdefault(co_key(l["company"]), l)     # one row per company, best job
     ranked = sorted(best_per_company.values(), key=rank_key)
     print(f"Eligible direct-hire companies today: {len(ranked)}")
     if not ranked:
@@ -880,13 +894,15 @@ def main():
         return
 
     # Skip companies already queued on an earlier day
-    reply = post({"action": "outreach_check", "companies": [norm(l["company"]) for l in ranked[:200]]})
+    # (checks the new company key and the older one, so nobody contacted before slips through)
+    check = sorted({k for l in ranked[:250] for k in (co_key(l["company"]), norm(l["company"]))})
+    reply = post({"action": "outreach_check", "companies": check})
     try:
         new_keys = set(json.loads(reply).get("new", []))
     except Exception:
         print("Could not check earlier outreach, continuing:", reply[:200])
-        new_keys = {norm(l["company"]) for l in ranked}
-    fresh_ranked = [l for l in ranked if norm(l["company"]) in new_keys]
+        new_keys = set(check)
+    fresh_ranked = [l for l in ranked if co_key(l["company"]) in new_keys and norm(l["company"]) in new_keys]
     # ----- Upwork first: it gets the Apify budget before LinkedIn founders -----
     up = upwork_leads(today, 0)
     upwork_spent = 0.01 + 0.003 * UPWORK_STATS["checked"] if UPWORK_ENABLED and APIFY_TOKEN else 0
@@ -896,9 +912,14 @@ def main():
     # otherwise -> LinkedIn. The channel never decides who gets in: the ranking does.
     cap = email_cap(today) if EMAIL_ENABLED else 0
     rows, linkedin_n, emailed, found_n, looked = [], 0, 0, 0, 0
+    unknown_n = 0
     for l in fresh_ranked:
         if len(rows) >= DAILY_TOTAL:
             break
+        if l.get("size_min") is None:
+            if unknown_n >= UNKNOWN_SIZE_MAX:
+                continue
+            unknown_n += 1
         email, kind = "", ""
         if emailed < cap and l.get("size_min") is not None and looked < EMAIL_LOOKUP_MAX:
             looked += 1
@@ -908,7 +929,7 @@ def main():
         p = free_founder(l["company"], l.get("people"))
         found_n += 1 if p else 0
         base = {
-            "key": norm(l["company"]),
+            "key": co_key(l["company"]),
             "date": today.strftime("%Y-%m-%d"),
             "rank": len(rows) + 1,
             "region": l["region"],
