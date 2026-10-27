@@ -1,1035 +1,1309 @@
 """
-VOGENT OUTREACH QUEUE (Phase 2, Step A)
-Runs right after the morning job search. Picks today's best direct-hire leads,
-finds each company's founder / CEO / owner with Apify, and sends a ranked
-"Outreach" tab to your Google Sheet with ready-to-send LinkedIn messages.
+VOGENT LEAD FINDER (JobSpy version)
+Searches LinkedIn Jobs across 5 region groups, once every morning.
+Reads the FULL description and keeps only:
+  - complete jobs (title, company, date and link all present)
+  - real matches for your roles
+  - English-language jobs that do not require another language
+  - direct employers (no agencies) with 200 staff or fewer (unknown size kept)
+Marks GHL jobs and Real Estate / Marketing companies as Priority,
+tags Remote / Hybrid / On-site, and sends everything to your Google Sheet.
 
-Your LinkedIn account is never used. You only edit the SETTINGS section.
+Each category + region group runs on its own GitHub machine in parallel.
+You only ever edit the SETTINGS section.
 """
 import datetime as dt
-import glob
 import json
-import math
 import unicodedata
 import os
 import re
 import time
-from urllib.parse import quote
 
+import pandas as pd
 import requests
+from jobspy import scrape_jobs
+from langdetect import DetectorFactory, detect
+
+DetectorFactory.seed = 0
 
 # ============================ SETTINGS ============================
-DAILY_TOTAL = 50                         # quality leads per day (email + LinkedIn); Upwork GHL rows come on top
-MAX_COMPANY_SIZE = 50                    # founder-led companies: 1 to 50 staff (unknown size ranked last)
-SMALL_COMPANY = 50
-WEEKDAYS_ONLY = True                     # Monday to Friday (Pakistan time)
-REGION_ORDER = {"USA": 1}                # USA only for now
-# Role names are labels only: any role that meets the criteria can be pitched (RevOps excluded).
-FIXED_FIRST_ROLE = "CRM Automation"
-DATA_ROLES = ["AI Automation", "Customer Service", "Bookkeeping", "Performance Marketing", "SEO", "Lead Generation",
-              "Social Media", "Content Writing", "Email Marketing", "Design & Video", "Website Support"]
-ROLE_RANK = {FIXED_FIRST_ROLE: 1, **{r: i + 2 for i, r in enumerate(DATA_ROLES)}}
-ROLES = list(ROLE_RANK)                  # VA, AI Automation, RevOps: never contacted automatically
-ROLE_REGIONS = {"SEO": ["USA", "UK"]}    # roles limited to certain client regions
-GHL_ONLY_FOR_CRM = False                 # CRM Automation = GHL or HubSpot (or other CRM) jobs
-APIFY_ACTOR = "harvestapi~linkedin-company-employees"
-APIFY_MAX_PEOPLE = 40                    # most people looked up in one pass
-# Job boards, job aggregators and "entry level, commission" style posts are never contacted
-NOT_EMPLOYER_NAME_WORDS = ["careers", "jobs", "job board", "jobboard", "hiring", "hunter", "recruit",
-                           "staffing", "talent", "wiraa", "remotehunter", "jobot", "dice", "ziprecruiter",
-                           "abilitylinks", "linkedin", "indeed", "glassdoor", "upwork", "fiverr",
-                           "jobgether", "town of", "city of", "county", "government", "ministry",
-                           "municipality", "university", "school district", "college", "authority",
-                           "department", "district", "state of", "commonwealth", "public schools"]
-NOT_EMPLOYER_TITLE_WORDS = ["entry level client", "client relations associate", "booking hotels",
-                            "travel agent", "brand ambassador", "commission only", "commission-only"]
-APIFY_DAILY_BUDGET_USD = 0.30            # whole Apify budget per weekday: Upwork first, the rest for LinkedIn founders
-FOUNDER_TITLES = ["Founder", "Co-Founder", "CEO", "Owner", "President", "Managing Director"]
-SPECIALISTS = {
-    "Lead Generation": "appointment setters and lead generation specialists",
-    "Social Media": "social media specialists",
-    "Content Writing": "content writers",
-    "Email Marketing": "email marketing specialists",
-    "Design & Video": "designers and video editors",
-    "Website Support": "website specialists (WordPress, Shopify, Webflow)",
-    "CRM Automation": "GoHighLevel specialists",
-    "Virtual Assistant": "remote support specialists",
-    "AI Automation": "AI and automation specialists",
-    "Customer Service": "customer support specialists",
-    "RevOps": "RevOps and sales operations specialists",
-    "Bookkeeping": "experienced remote bookkeepers",
-    "Performance Marketing": "performance marketing specialists",
-    "SEO": "SEO specialists",
+# One run per day: 48h window catches anything missed yesterday. Mondays look back 72h so jobs
+# posted on Friday (US business hours, after Friday's run) still reach Monday's outreach.
+PKT = dt.timezone(dt.timedelta(hours=5))
+HOURS_OLD = 72 if dt.datetime.now(PKT).weekday() == 0 else 48
+MAX_EMPLOYEES = 50      # founder-led small companies only (unknown size is kept, ranked last)
+
+# rank = order in your sheet. scale = fewer results per search for smaller markets.
+# Each location: (LinkedIn search location, short name shown in sheet)
+REGIONS = {
+    "USA": {"enabled": True, "rank": 1, "scale": 1.0, "locations": [("United States", "USA")]},
 }
-# ---------- Email (Phase 2, Step B) ----------
-EMAIL_ENABLED = True
-EMAIL_START_DATE = "2026-10-13"          # warm-up: week 1 = 10 a day, week 2 = 20, then 30
-EMAIL_LOOKUP_MAX = 90                    # companies checked for an email address each day
-SENDER_NAME = "Usama Yousaf"
-SENDER_TITLE = "Founder, Vogent Labs"
-SIGNATURE = f"{SENDER_NAME}\n{SENDER_TITLE}"   # every email; no website line (better for spam filters)
-LINKEDIN_URL = "linkedin.com/in/uxamayousaf"
-CALENDLY_URL = "https://calendly.com/vogentlabs"
-LINKEDIN_IN_FIRST_EMAIL_AFTER_DAYS = 14   # first email gets the LinkedIn link once warm-up is done
-EMAIL_SPECIALISTS = {
-    "Lead Generation": "appointment setters and lead generation specialists",
-    "Social Media": "social media specialists",
-    "Content Writing": "content writers",
-    "Email Marketing": "email marketing specialists",
-    "Design & Video": "designers and video editors",
-    "Website Support": "website specialists (WordPress, Shopify, Webflow)",
-    "CRM Automation": "GoHighLevel specialists",
-    "Virtual Assistant": "remote support staff",
-    "AI Automation": "AI and automation specialists",
-    "Customer Service": "customer support specialists",
-    "RevOps": "RevOps and sales operations specialists",
-    "Bookkeeping": "experienced remote bookkeepers",
-    "Performance Marketing": "performance marketing specialists",
-    "SEO": "SEO specialists",
+SITES = ["linkedin", "indeed", "zip_recruiter", "google"]   # same search on all four job sites
+SOURCE_LABELS = {"linkedin": "LinkedIn", "indeed": "Indeed", "zip_recruiter": "ZipRecruiter", "google": "Google Jobs",
+                 "remotive": "Remotive", "remoteok": "Remote OK", "wwr": "We Work Remotely", "himalayas": "Himalayas",
+                 "jobicy": "Jobicy"}
+
+GHL_TERMS = ["go high level", "highlevel", "high level crm", "ghl", "lead connector"]
+REAL_ESTATE_WORDS = ["real estate", "realty", "realtor", "properties", "homes", "property management"]
+MARKETING_WORDS = ["marketing", "advertising", "media", "agency"]
+
+CATEGORIES = {
+    "CRM Automation": {   # GHL jobs are tagged and shown first
+        "enabled": True, "deep_results": 100, "normal_results": 40,
+        "deep_searches": ["GoHighLevel", "Go High Level", "GHL", "HighLevel"],
+        "searches": [
+            "HubSpot Specialist", "HubSpot Administrator", "CRM Automation Specialist",
+            "CRM Administrator", "CRM Manager", "CRM Specialist",
+            "Marketing Automation Specialist", "Funnel Builder",
+        ],
+        "must_mention": GHL_TERMS + ["hubspot", "zoho crm", "keap", "activecampaign", "pipedrive"],
+    },
+    "AI Automation": {
+        "enabled": True, "deep_results": 80, "normal_results": 40,
+        "deep_searches": ["AI Automation Specialist", "n8n", "Make.com"],
+        "searches": [
+            "Automation Specialist", "Zapier Expert", "AI Agent Developer",
+            "Workflow Automation Specialist", "AI Integration Specialist",
+            "No-Code Automation", "AI Automation Consultant",
+        ],
+        "must_mention": [
+            "n8n", "make.com", "integromat", "zapier", "ai agent", "ai agents",
+            "workflow automation", "openai api", "chatgpt api", "voiceflow", "relevance ai",
+        ],
+    },
+    "RevOps": {
+        "enabled": False, "deep_results": 80, "normal_results": 40,
+        "deep_searches": ["Revenue Operations", "RevOps"],
+        "searches": [
+            "RevOps Manager", "RevOps Specialist", "Revenue Operations Analyst",
+            "Sales Operations Specialist", "Marketing Operations Specialist", "GTM Operations",
+        ],
+        "must_mention": [
+            "revenue operations", "revops", "sales operations", "sales ops",
+            "marketing operations", "gtm operations",
+        ],
+    },
+    "Remote Boards": {
+        # Remote-first job boards (every job is remote); the role label comes from the job title
+        "enabled": True, "deep_results": 0, "normal_results": 0, "regions": ["USA"],
+        "deep_searches": [], "searches": [], "must_mention": [],
+    },
+    "SEO": {
+        # US / UK clients only, so it is searched in those two region groups
+        "enabled": True, "deep_results": 80, "normal_results": 40,
+        "regions": ["USA"],
+        "deep_searches": ["SEO Specialist", "SEO Manager"],
+        "searches": [
+            "SEO Analyst", "SEO Strategist", "Technical SEO", "Local SEO", "SEO Executive",
+            "Search Engine Optimization", "Link Building Specialist", "SEO Content Specialist",
+        ],
+        "must_mention": [
+            "seo", "search engine optimization", "on-page", "off-page", "link building",
+            "keyword research", "technical seo", "local seo", "google search console",
+            "semrush", "ahrefs", "moz",
+        ],
+    },
+    "Bookkeeping": {
+        "enabled": True, "deep_results": 80, "normal_results": 30,
+        "deep_searches": ["Bookkeeper", "Remote Bookkeeper"],
+        "searches": [
+            "Bookkeeping Specialist", "Accounting Assistant",
+            "Accounts Payable Specialist", "Accounts Receivable Specialist",
+        ],
+        "must_mention": [
+            "bookkeeper", "bookkeeping", "quickbooks", "xero", "reconciliation",
+            "reconciliations", "accounts payable", "accounts receivable",
+        ],
+    },
+    "Performance Marketing": {
+        "enabled": True, "deep_results": 80, "normal_results": 40,
+        "deep_searches": ["Performance Marketer", "Performance Marketing Specialist", "Media Buyer", "Paid Media Specialist"],
+        "searches": [
+            "Paid Ads Manager", "PPC Specialist", "Paid Search Specialist", "SEM Specialist",
+            "Google Ads Specialist", "Meta Ads Specialist", "Facebook Ads Specialist",
+            "Paid Social Specialist", "TikTok Ads", "Amazon PPC Specialist",
+            "Growth Marketing Manager", "Digital Advertising Specialist",
+            "Digital Marketing Specialist", "Agency Account Coordinator",
+        ],
+        "must_mention": [
+            "meta ads", "facebook ads", "instagram ads", "google ads", "adwords", "ppc",
+            "paid social", "paid media", "paid search", "sem", "media buying",
+            "facebook advertising", "tiktok ads", "linkedin ads", "youtube ads",
+            "amazon ppc", "performance marketing", "paid acquisition", "roas",
+        ],
+    },
+    "Virtual Assistant": {
+        "enabled": True, "deep_results": 100, "normal_results": 30,
+        "deep_searches": ["Virtual Assistant", "Executive Assistant"],
+        "searches": [
+            "Remote Assistant", "Administrative Assistant", "Admin Assistant",
+            "Personal Assistant", "Operations Assistant", "Executive Support",
+            "Data Entry Specialist", "Appointment Setter", "Scheduling Coordinator",
+            "Real Estate Assistant", "Real Estate Virtual Assistant",
+            "Transaction Coordinator", "Inside Sales Agent", "Leasing Assistant",
+            "Listing Coordinator",
+        ],
+        "must_mention": [
+            "virtual assistant", "executive assistant", "administrative assistant",
+            "admin assistant", "personal assistant", "remote assistant",
+            "operations assistant", "executive support", "data entry",
+            "appointment setter", "appointment setting", "calendar management",
+            "inbox management", "transaction coordinator", "inside sales agent",
+            "leasing assistant", "leasing coordinator", "listing coordinator",
+        ],
+    },
+    "Lead Generation": {
+        "enabled": True, "deep_results": 80, "normal_results": 40,
+        "deep_searches": ["Sales Development Representative", "Appointment Setter", "Lead Generation Specialist"],
+        "searches": ["SDR", "Business Development Representative", "BDR", "Cold Caller", "Lead Generation Assistant",
+                     "Outbound Caller", "Prospecting Specialist"],
+        "must_mention": ["appointment setting", "appointment setter", "lead generation", "cold calling",
+                         "cold call", "outbound calls", "prospecting", "booking appointments", "set appointments",
+                         "sales development", "outbound", "pipeline", "book meetings", "booking meetings"],
+    },
+    "Social Media": {
+        "enabled": True, "deep_results": 80, "normal_results": 40,
+        "deep_searches": ["Social Media Coordinator", "Social Media Specialist"],
+        "searches": ["Social Media Assistant", "Social Media Content Creator", "Community Coordinator"],
+        "must_mention": ["social media", "instagram", "tiktok", "facebook", "content calendar", "community management"],
+    },
+    "Content Writing": {
+        "enabled": True, "deep_results": 80, "normal_results": 40,
+        "deep_searches": ["Content Writer", "Copywriter"],
+        "searches": ["Blog Writer", "SEO Writer", "Content Specialist", "Ghostwriter"],
+        "must_mention": ["content writing", "copywriting", "blog", "articles", "copy", "writing", "editorial"],
+    },
+    "Email Marketing": {
+        "enabled": True, "deep_results": 60, "normal_results": 30,
+        "deep_searches": ["Email Marketing Specialist"],
+        "searches": ["Email Marketing Coordinator", "Email Marketing Assistant", "Klaviyo Specialist"],
+        "must_mention": ["email marketing", "klaviyo", "mailchimp", "email campaigns", "newsletter", "email automation"],
+    },
+    "Design & Video": {
+        "enabled": True, "deep_results": 80, "normal_results": 40,
+        "deep_searches": ["Content and Graphic Designer", "Graphic Designer", "Video Editor"],
+        "searches": ["Content Creator Graphic Designer", "Junior Graphic Designer", "Canva Designer",
+                     "Motion Graphics Designer", "Content Designer"],
+        "must_mention": ["graphic design", "canva", "photoshop", "illustrator", "adobe", "video editing",
+                         "premiere", "after effects", "capcut", "final cut", "figma"],
+    },
+    "Website Support": {
+        "enabled": True, "deep_results": 60, "normal_results": 30,
+        "deep_searches": ["WordPress Developer", "Shopify Specialist", "Web Developer"],
+        "searches": ["Webflow Developer", "Website Coordinator", "Website Assistant", "Shopify Developer",
+                     "Front End Developer", "App Developer"],
+        "must_mention": ["wordpress", "shopify", "webflow", "elementor", "squarespace", "wix", "website updates",
+                         "web develop", "front end", "front-end", "react", "javascript", "app develop"],
+    },
+    "Customer Service": {
+        "enabled": True, "deep_results": 80, "normal_results": 30,
+        "deep_searches": ["Customer Service Representative", "Customer Support Specialist"],
+        "searches": [
+            "Customer Support Representative", "Customer Care Representative",
+            "Customer Experience Specialist", "Customer Success Associate",
+            "Client Support Specialist", "Technical Support Representative",
+            "Chat Support", "Email Support", "Call Center Representative",
+            "Member Services Representative", "Remote Customer Service",
+        ],
+        "must_mention": [
+            "customer service", "customer support", "customer care", "customer experience",
+            "customer success", "client support", "client services", "technical support",
+            "tech support", "help desk", "live chat", "chat support", "email support",
+            "call center", "call centre", "inbound calls", "zendesk", "freshdesk", "intercom",
+        ],
+    },
 }
+
+# ---------- Recruiter / agency filter (add names anytime, lowercase) ----------
+AGENCY_BLOCKLIST = [
+    # job boards and gig marketplaces (not employers)
+    "isarta", "goodwork", "teema", "mercor", "outlier ai", "alignerr", "dataannotation", "data annotation tech",
+    "braintrust", "toptal", "crossover", "remotasks", "micro1",
+    "robert half", "insight global", "randstad", "adecco", "teksystems", "kforce",
+    "aerotek", "kelly services", "manpower", "express employment", "beacon hill",
+    "belay", "boldly", "wing assistant", "prialto", "time etc", "virtual staff finder",
+    "hire overseas", "remote staff", "outsource", "upwork", "fiverr",
+    "teleperformance", "concentrix", "alorica", "ttec", "sitel", "foundever",
+    "hays", "reed", "michael page", "page group",
+]
+AGENCY_NAME_WORDS = [
+    "staffing", "recruit", "talent", "placement", "workforce", "personnel",
+    "headhunt", "executive search", "4rec", "recruitment",
+]
+AGENCY_PHRASES = [
+    "our client", "on behalf of our client", "on behalf of a client",
+    "for a client of ours", "client of ours",
+]
+
+# Extra agency signals, used to keep the OUTREACH list strictly to direct employers
+STRICT_AGENCY_PHRASES = [
+    "staffing agency", "staffing firm", "staffing company", "staffing partner", "recruitment agency",
+    "recruiting agency", "recruiting firm", "recruitment firm", "talent agency", "placement agency",
+    "talent acquisition partner", "our client", "client is seeking", "client is looking", "for our client",
+    "on behalf of", "contract-to-hire", "contract to hire", "outsourcing company", "bpo",
+    "we connect talent", "we place candidates", "hiring on behalf", "virtual assistant agency",
+    "remote staffing", "offshore staffing", "we are a staffing", "we are a recruiting",
+]
+STRICT_INDUSTRY_WORDS = ["staffing", "recruit", "human resources services", "outsourcing", "employment"]
+
+# ---------- Language filter ----------
+OTHER_LANGUAGES = [
+    "Dutch", "Flemish", "German", "French", "Spanish", "Italian", "Portuguese", "Polish",
+    "Swedish", "Danish", "Norwegian", "Finnish", "Czech", "Hungarian", "Romanian", "Greek",
+    "Arabic", "Turkish", "Hebrew", "Russian", "Ukrainian", "Mandarin", "Cantonese",
+    "Japanese", "Korean", "Malay", "Tagalog",
+]
+REQUIRE_WORDS = ["fluent", "fluency", "native", "proficient", "proficiency", "required",
+                 "must", "mandatory", "essential", "bilingual", "speaking", "speaker"]
+PLUS_WORDS = ["plus", "preferred", "nice to have", "bonus", "advantage", "asset",
+              "desirable", "beneficial", "helpful", "ideally"]
+
+# ---------- Key skills (shown in the sheet and used in each custom note) ----------
+# (name shown, words to look for in the job description)
+SKILLS = [
+    ("GHL", ["gohighlevel", "go high level", "highlevel", "ghl"]),
+    ("appointment setting", ["appointment setting", "booking appointments", "set appointments"]),
+    ("cold calling", ["cold calling", "cold call", "outbound calls"]), ("Instagram", ["instagram"]),
+    ("TikTok", ["tiktok"]), ("content calendars", ["content calendar"]), ("copywriting", ["copywriting"]),
+    ("blog posts", ["blog"]), ("Klaviyo", ["klaviyo"]), ("Mailchimp", ["mailchimp"]), ("Canva", ["canva"]),
+    ("Photoshop", ["photoshop"]), ("Illustrator", ["illustrator"]), ("Premiere Pro", ["premiere"]),
+    ("After Effects", ["after effects"]), ("CapCut", ["capcut"]), ("Figma", ["figma"]),
+    ("Webflow", ["webflow"]), ("Elementor", ["elementor"]),
+    ("HubSpot", ["hubspot"]), ("Salesforce", ["salesforce"]), ("Zoho", ["zoho"]),
+    ("Keap", ["keap", "infusionsoft"]), ("ActiveCampaign", ["activecampaign"]),
+    ("Pipedrive", ["pipedrive"]), ("Zapier", ["zapier"]), ("Make", ["make.com", "integromat"]),
+    ("n8n", ["n8n"]), ("Airtable", ["airtable"]), ("AI agents", ["ai agent", "ai agents"]),
+    ("chatbots", ["chatbot", "chatbots", "voiceflow"]), ("voice AI", ["voice agent", "voice ai", "vapi", "retell"]),
+    ("OpenAI", ["openai", "chatgpt", "gpt-4", "gpt api"]), ("APIs and webhooks", ["webhook", "webhooks", "api integration", "api integrations"]),
+    ("funnels", ["funnel", "funnels"]), ("landing pages", ["landing page", "landing pages"]),
+    ("SMS campaigns", ["sms"]), ("email campaigns", ["email campaign", "email campaigns", "email marketing", "drip"]),
+    ("workflows", ["workflow", "workflows", "automations"]), ("pipelines", ["pipeline management", "pipelines"]),
+    ("lead routing", ["lead routing"]), ("forecasting", ["forecasting", "forecast"]), ("attribution", ["attribution"]),
+    ("dashboards", ["dashboards", "reporting dashboards"]),
+    ("Meta Ads", ["meta ads", "facebook ads", "instagram ads", "facebook advertising"]),
+    ("Google Ads", ["google ads", "adwords", "google search ads"]), ("TikTok Ads", ["tiktok ads"]),
+    ("LinkedIn Ads", ["linkedin ads"]), ("PPC", ["ppc", "paid search"]), ("ROAS", ["roas"]),
+    ("creative testing", ["creative testing", "a/b testing", "ab testing"]), ("GA4", ["ga4", "google analytics"]),
+    ("retargeting", ["retargeting", "remarketing"]), ("Shopify", ["shopify"]),
+    ("SEMrush", ["semrush"]), ("Ahrefs", ["ahrefs"]), ("Search Console", ["google search console", "search console"]),
+    ("keyword research", ["keyword research"]), ("link building", ["link building", "backlinks"]),
+    ("technical SEO", ["technical seo", "site audits", "site audit"]), ("on-page SEO", ["on-page", "on page seo"]),
+    ("local SEO", ["local seo", "google business profile", "gmb"]), ("WordPress", ["wordpress"]),
+    ("QuickBooks", ["quickbooks", "qbo"]), ("Xero", ["xero"]), ("month-end close", ["month-end", "month end close"]),
+    ("reconciliations", ["reconciliation", "reconciliations", "reconcile"]), ("payroll", ["payroll", "gusto"]),
+    ("payables", ["accounts payable"]), ("receivables", ["accounts receivable"]), ("invoicing", ["invoicing", "invoices"]),
+    ("sales tax", ["sales tax"]), ("financial reports", ["financial statements", "financial reporting", "p&l"]),
+    ("calendar management", ["calendar management", "calendar"]), ("inbox management", ["inbox management", "inbox", "email management"]),
+    ("scheduling", ["scheduling", "appointment setting", "appointments"]), ("data entry", ["data entry"]),
+    ("travel booking", ["travel arrangements", "travel booking"]), ("transaction coordination", ["transaction coordination", "transaction coordinator"]),
+    ("CRM updates", ["crm updates", "updating the crm", "crm data"]), ("research", ["research"]),
+    ("social media", ["social media"]), ("Google Workspace", ["google workspace", "g suite"]),
+    ("phone support", ["phone support", "inbound calls", "answering calls", "phone calls"]),
+    ("live chat", ["live chat", "chat support"]), ("email support", ["email support"]),
+    ("Zendesk", ["zendesk"]), ("Freshdesk", ["freshdesk"]), ("Intercom", ["intercom"]), ("Gorgias", ["gorgias"]),
+    ("ticketing", ["ticketing", "tickets"]), ("returns and refunds", ["returns", "refunds"]),
+    ("order support", ["order status", "order issues", "orders"]),
+]
+SKILL_REGEXES = None  # built on first use
+
+# ---------- Location-locked filter ----------
+# Jobs that REQUIRE the person to live in a specific country / place are skipped,
+# even if the job is remote ("must be located in the US", "Remote (US only)", "UK residents only").
+_PLACES = (r"(?:US|U\.S\.?|USA|U\.S\.A\.?|United States|UK|U\.K\.?|United Kingdom|EU|Europe|Canada|Germany|"
+           r"Australia|New Zealand|UAE|Singapore|Ireland|Netherlands|France|Spain|Switzerland|"
+           r"Saudi Arabia|Qatar|Malaysia|Hong Kong|South Africa|North America|EST|PST|CST)")
+LOCATION_LOCK_PATTERNS = [
+    re.compile(r"\b[Mm]ust\s+(?:be\s+)?(?:currently\s+)?(?:located|based|residing|reside|live|living)\s+(?:in|within)\s+(?:the\s+)?[A-Z]"),
+    re.compile(r"\b" + _PLACES + r"[\s-]*(?:based\s+)?(?:residents?|citizens?|candidates?|applicants?|persons?)\s+only\b", re.I),
+    re.compile(r"\b(?:only|exclusively)\s+(?:open\s+to|accepting|considering|hiring)\s+(?:candidates|applicants|people|those|individuals)"
+               r"\s+(?:who\s+(?:are|live)\s+)?(?:located|based|residing|living|in|from)\b", re.I),
+    re.compile(r"\(\s*" + _PLACES + r"[\s-]*(?:based\s+)?only\s*\)", re.I),
+    re.compile(r"\b" + _PLACES + r"[\s-]*based\s+only\b", re.I),
+    re.compile(r"\b(?:remote|work from home|wfh)\W{1,3}" + _PLACES + r"[\s-]*only\b", re.I),
+    re.compile(r"\b[Mm]ust\s+(?:be\s+)?(?:a\s+)?(?:US|U\.S\.|UK|Canadian|American|German|Australian)\s+(?:citizen|resident)"),
+    re.compile(r"\bcandidates?\s+(?:must|need to|should)\s+(?:be\s+)?(?:located|based|residing)\s+in\b", re.I),
+]
+
+# Only CLEAR office requirements count (not "on-site training" or "in-person retreat")
+STRONG_ONSITE = ["on-site role", "onsite role", "on-site position", "onsite position", "fully on-site",
+                 "fully onsite", "100% on-site", "100% onsite", "in-office role", "in office role",
+                 "in-office position", "must work on-site", "must work onsite", "must be in the office",
+                 "must work from our office", "work from our office", "report to our office", "on-site in ",
+                 "onsite in ", "days a week in the office", "days a week in office", "days per week in office",
+                 "days in the office", "this is an in-person", "in-person role", "in-person position",
+                 "must be able to commute", "must reside within", "not a remote", "no remote"]
+STRONG_ONSITE_RE = re.compile(r"\b(?:on[- ]?site|in[- ]office|in[- ]person)\b[^.]{0,60}\b(?:role|position|job|opportunity)\b"
+                              r"|\b(?:role|position|job) is (?:fully |100% )?(?:on[- ]?site|in[- ]office|in[- ]person)\b", re.I)
+STRONG_HYBRID = ["hybrid role", "hybrid position", "hybrid schedule", "hybrid work", "this is a hybrid"]
+STRONG_REMOTE = ["fully remote", "100% remote", "remote position", "remote role", "work from anywhere",
+                 "remote-first", "this is a remote", "remote opportunity", "work remotely", "remote job",
+                 "fully-remote", "remote-only", "completely remote", "remote work from home"]
+# Strongest offshore signal: the employer is open to people outside the US
+WORLDWIDE_RE = re.compile(r"work from anywhere|anywhere in the world|worldwide|world-wide|international "
+                          r"(?:candidates|applicants|contractors|talent)|global(?:ly)? (?:remote|team|talent)|"
+                          r"any time ?zone|all time ?zones|"
+                          r"\basync(?:hronous)?\b|offshore|overseas", re.I)
+# Hard local requirements: the job cannot be done from Pakistan
+HARD_LOCAL_RE = re.compile(r"\bw-?2 (?:only|employee|employment|position|role)\b|"
+                           r"must be (?:a )?(?:u\.?s\.?|united states|us) citizen|"
+                           r"(?:u\.?s\.?|us) citizenship (?:is )?required|security clearance|"
+                           r"must (?:live|reside|be located|be based) (?:in|within|near)|local (?:candidates|applicants) only|"
+                           r"must hold an? (?:active |valid )?(?:insurance|real estate|nursing|cpa|state) licen[sc]e", re.I)
+# Commission-only, MLM, "partner / co-founder" and paid-task posts are not real hires
+NOT_A_HIRE_TITLE_RE = re.compile(r"commission|co-?founder|\bequity\b|\bpartner\b(?! (?:success|marketing|manager|"
+                                 r"relations|account))|paid (?:data )?task|data task|representative needed|\bcloser\b|"
+                                 r"high[- ]ticket|financial (?:professional|advisor|representative)|insurance (?:agent|producer)",
+                                 re.I)
+NOT_A_HIRE_DESC_RE = re.compile(r"commission[- ]only|commission[- ]based|100% commission|straight commission|"
+                                r"equity[- ]only|unpaid|no base (?:pay|salary)|uncapped commission", re.I)
+# IT services firms that resell staff to their clients
+IT_STAFFING_NAME_RE = re.compile(r"\b(?:it solutions|infotech|info tech|technologies|tech solutions|softech|"
+                                 r"consulting|consultancy|staffing)\b", re.I)
+# Small-business clue for companies whose size is unknown
+TINY_CLUE_RE = re.compile(r"small (?:business|team|company|firm|family)|family[- ]owned|owner[- ]operated|"
+                          r"solo(?:preneur)?|boutique|our founder|the founder|work directly with (?:the )?(?:founder|owner|ceo)|"
+                          r"report(?:ing)? (?:directly )?to (?:the )?(?:founder|owner|ceo)", re.I)
+HARD_LOCAL_TITLE_RE = re.compile(r"\b(?:us|u\.s\.|usa|uk|canada)[- ]based\b|\blicensed\b|\bhotel\b|"
+                                 r"guest (?:experience|service|services)|front desk|concierge", re.I)
+ONSITE_PHRASES = [
+    "on-site", "onsite", "on site", "in office", "in-office", "in person",
+    "in-person", "must be able to commute", "must reside within",
+]
 # ==================================================================
 
 WEBAPP_URL = os.environ["SHEET_WEBAPP_URL"]
 TOKEN = os.environ["SHEET_TOKEN"]
-APIFY_TOKEN = os.environ.get("APIFY_TOKEN", "").strip()
-PKT = dt.timezone(dt.timedelta(hours=5))
-WORK_ORDER = {"Remote": 0, "Not confirmed": 1, "Remote (check)": 1, "Remote (mentioned)": 1, "Not stated": 2, "Hybrid": 3, "On-site": 4}
-OUTREACH_WORK_TYPES = ["Remote"]   # only jobs LinkedIn itself shows as Remote (never On-site, Hybrid or unconfirmed)
-EMAIL_DAILY = 22                         # new emails per day (USA first, then Canada, then UK).
-                                         # 22 new + 3 follow-ups each = about 80 sends a day, under the 95 cap
-TITLE_RANK = ["founder", "co-founder", "ceo", "chief executive", "owner", "president",
-              "managing director", "principal", "partner", "coo", "general manager"]
+ONLY_CATEGORY = os.environ.get("CATEGORY", "").strip()
+ONLY_REGION = os.environ.get("REGION", "").strip()
+WORK_ORDER = {"Remote": 0, "Not confirmed": 1, "Not stated": 2, "Hybrid": 3, "On-site": 4}
+UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/126 Safari/537.36"}
+SIZE_CACHE = {}
 
 
-def norm(s):
-    return re.sub(r"[^a-z0-9]", "", str(s or "").lower())
+def build_regex(keyword):
+    parts = [re.escape(p) for p in re.split(r"[\s-]+", keyword.strip()) if p]
+    return re.compile(r"\b" + r"[\s-]*".join(parts) + r"\b", re.IGNORECASE)
 
 
-def co_key(name):
-    """One company, one row: 'Blueprint Manufacturing Co.' = 'Blueprint Manufacturing',
-    'A Full Renovation – Projects' = 'A Full Renovation'."""
-    n = re.split(r"\s+[–—|]\s+|\s+-\s+", str(name or ""))[0]
-    n = re.sub(r"[,.]?\s+(?:co|company|llc|inc|incorporated|ltd|limited|corp|corporation|group|pllc|lp|llp)\.?$",
-               "", n.strip(), flags=re.I)
-    return norm(n) or norm(name)
+GHL_REGEXES = [build_regex(k) for k in GHL_TERMS]
+LANG_RE = re.compile(r"\b(" + "|".join(OTHER_LANGUAGES) + r")\b")  # case-sensitive on purpose
 
 
-def slug(url):
-    m = re.search(r"linkedin\.com/company/([^/?#]+)", str(url or ""))
-    return m.group(1).lower() if m else ""
-
-
-def post(payload):
-    payload["token"] = TOKEN
-    r = requests.post(WEBAPP_URL, json=payload, timeout=180)
-    return r.text
-
-
-# ---------- 1. Load today's leads from the job search ----------
-def load_candidates():
-    leads = []
-    for path in glob.glob("candidates/**/*.json", recursive=True):
-        try:
-            with open(path) as fh:
-                leads.extend(json.load(fh))
-        except Exception as e:
-            print("Could not read", path, e)
-    return leads
-
-
-def eligible(l):
-    if l.get("work_type") not in OUTREACH_WORK_TYPES:
-        return False                       # clearly in-office jobs stay in the Leads tab only
-    if l.get("region") not in REGION_ORDER:
-        return False
-    if l.get("category") in ("RevOps",):
-        return False                       # US companies hire RevOps locally
-    if l.get("category") == "CRM Automation" and GHL_ONLY_FOR_CRM and "GHL" not in (l.get("priority") or ""):
-        return False
-    if not l.get("direct", True):
-        return False                       # staffing / recruiting / outsourcing: never contacted
-    comp, title = str(l.get("company", "")).lower(), str(l.get("title", "")).lower()
-    if any(w in comp for w in NOT_EMPLOYER_NAME_WORDS) or any(w in title for w in NOT_EMPLOYER_TITLE_WORDS):
-        return False                       # job boards, aggregators, entry-level commission posts
-    size_min = l.get("size_min")
-    if size_min is not None and size_min > MAX_COMPANY_SIZE:
-        return False
-    if is_nonprofit(l) or norm(l.get("company")) in ("confidential", "confidentialcompany", "stealth", "stealthstartup"):
-        return False                       # nonprofits, associations, credit unions, hidden company names
-    if size_min is None and not ("GHL" in str(l.get("priority") or "") or l.get("worldwide") or l.get("tiny_clue")):
-        return False                       # unknown size only with a strong signal (GHL, worldwide, tiny business)
-    return all(str(l.get(k) or "").strip() for k in ("company", "title", "url"))
-
-
-GROWING = set()                          # companies posting 2+ matching roles today
-
-
-NONPROFIT_IND = re.compile(r"non-?profit|philanthrop|civic|social organization|government|public policy|"
-                           r"religious|fund-?raising|museums?|libraries", re.I)
-NONPROFIT_NAME = re.compile(r"\b(foundation|council|association|society|charity|charitable|institute|"
-                            r"federation|ministries|church|alliance|credit union)\b", re.I)
-UNKNOWN_SIZE_MAX = 10                    # unknown-size companies per day, and only with a strong signal
-
-
-def is_nonprofit(l):
-    """Nonprofits and public bodies rarely buy offshore staffing: ranked lower, never removed."""
-    site = str(l.get("website") or "").lower()
-    return bool(NONPROFIT_IND.search(str(l.get("industry") or "")) or NONPROFIT_NAME.search(str(l.get("company") or ""))
-                or re.search(r"\.org(?:\.[a-z]{2})?(?:/|$)", site))
-
-
-def size_tier(l):
-    """1-10 staff first, then 11-20, then 21-50, unknown size last."""
-    size_min, staff = l.get("size_min"), l.get("staff_count")
-    if size_min is None:
-        return 3
-    if size_min <= 10:
-        return 0
-    if staff is not None and staff <= 20:
-        return 1
-    return 2
-
-
-def rank_key(l):
-    """Best first: smallest companies, then 'open worldwide' signals, then GoHighLevel, then newest."""
-    try:
-        newest = -dt.date.fromisoformat(str(l.get("posted"))[:10]).toordinal()
-    except ValueError:
-        newest = 0
-    ghl = 0 if "GHL" in str(l.get("priority") or "") else 1
-    return (size_tier(l), 0 if l.get("worldwide") else 1, ghl, 1 if is_nonprofit(l) else 0, newest)
-
-
-# ---------- 2. Find decision makers with Apify ----------
-def apify_run(body, cost_cap):
-    return apify_run_actor(APIFY_ACTOR, body, cost_cap)
-
-
-def apify_run_actor(actor, body, cost_cap):
-    base = "https://api.apify.com/v2"
-    run = requests.post(f"{base}/acts/{actor}/runs",
-                        params={"token": APIFY_TOKEN, "maxTotalChargeUsd": round(cost_cap, 2)},
-                        json=body, timeout=60).json()["data"]
-    run_id, dataset = run["id"], run["defaultDatasetId"]
-    status = ""
-    for _ in range(90):                                   # wait up to ~15 minutes
-        time.sleep(10)
-        status = requests.get(f"{base}/actor-runs/{run_id}", params={"token": APIFY_TOKEN},
-                              timeout=30).json()["data"]["status"]
-        if status in ("SUCCEEDED", "FAILED", "ABORTED", "TIMED-OUT"):
-            break
-    print("Apify run status:", status)
-    items = requests.get(f"{base}/datasets/{dataset}/items",
-                         params={"token": APIFY_TOKEN, "clean": "true"}, timeout=60).json()
-    return items if isinstance(items, list) else []
-
-
-def apify_people(company_urls, second_pass=False, budget=APIFY_DAILY_BUDGET_USD):
-    """Pass 1: senior people (CXO, Owner / Partner). Pass 2: founder-type job titles for the misses."""
-    if not APIFY_TOKEN or not company_urls or budget < 0.06:
-        return []
-    max_people = int((budget - 0.02) / 0.004)             # $0.02 start + about $0.004 per person
-    body = {
-        "companies": company_urls,
-        "companyBatchMode": "all_at_once",
-        "profileScraperMode": "Short ($4 per 1k)",
-        "maxItems": max(5, min(max_people, 2 * len(company_urls), APIFY_MAX_PEOPLE)),
-    }
-    if second_pass:
-        body["jobTitles"] = FOUNDER_TITLES
-    else:
-        body["seniorityLevelIds"] = ["310", "320"]        # CXO, Owner / Partner
-    try:
-        return apify_run(body, budget)
-    except Exception as e:
-        print("Apify lookup failed:", e)
-        return []
-
-
-def clean_name(n):
-    n = re.sub(r"\(.*?\)|\[.*?\]", "", str(n or ""))          # "(Let's connect)" etc.
-    n = n.split(",")[0]                                          # ", MBA" / ", CPA"
-    n = re.sub(r"[^\w\s.'-]", "", n, flags=re.UNICODE)           # emojis and symbols
-    return re.sub(r"\s+", " ", n).strip()
-
-
-def person_info(item):
-    first = clean_name(item.get("firstName"))
-    last = clean_name(item.get("lastName"))
-    name = (first + " " + last).strip() or clean_name(item.get("fullName") or item.get("name"))
-    url = item.get("linkedinUrl") or item.get("profileUrl") or item.get("linkedInUrl") or item.get("url") or ""
-    title = str(item.get("headline") or "")
-    comp_url, comp_name = "", ""
-    positions = item.get("currentPosition") or item.get("currentPositions") or item.get("experience") or []
-    if isinstance(positions, dict):
-        positions = [positions]
-    if positions and isinstance(positions[0], dict):
-        p = positions[0]
-        title = p.get("position") or p.get("title") or title
-        comp_url = p.get("companyLinkedinUrl") or p.get("companyUrl") or p.get("companyLinkedInUrl") or ""
-        comp_name = p.get("companyName") or p.get("company") or ""
-    return {"first": first or name.split(" ")[0] if name else "", "name": name, "url": url,
-            "title": str(title).strip(), "comp_slug": slug(comp_url), "comp_name": norm(comp_name)}
-
-
-def title_score(title):
-    t = title.lower()
-    for i, word in enumerate(TITLE_RANK):
-        if word in t:
-            return i
-    return len(TITLE_RANK)
-
-
-def match_people(targets, items):
-    people = [person_info(i) for i in items if isinstance(i, dict)]
-    people = [p for p in people if p["name"] and p["url"]]
-    best = {}
-    for t in targets:
-        t_slug, t_name = slug(t["company_url"]), norm(t["company"])
-        cands = [p for p in people if (t_slug and p["comp_slug"] == t_slug)
-                 or (t_name and p["comp_name"] and (p["comp_name"] == t_name
-                     or t_name in p["comp_name"] or p["comp_name"] in t_name))]
-        if cands:
-            best[t["company"]] = sorted(cands, key=lambda p: title_score(p["title"]))[0]
-    return best
-
-
-# ---------- 2b. Free founder lookup (no Apify, no LinkedIn login) ----------
-FOUNDER_WORDS = ["founder", "co-founder", "ceo", "chief executive", "owner", "president",
-                 "managing director", "principal", "partner"]
-
-
-def ddg_search(query):
-    """Public web search (DuckDuckGo). Returns [(url, title)]."""
-    from urllib.parse import parse_qs, unquote, urlparse
-    try:
-        r = requests.get("https://html.duckduckgo.com/html/", params={"q": query}, headers=UA, timeout=20)
-        out = []
-        for href, title in re.findall(r'class="result__a"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)</a>', r.text):
-            if "uddg=" in href:
-                href = unquote(parse_qs(urlparse(href).query).get("uddg", [""])[0])
-            out.append((href, re.sub(r"<[^>]+>", "", title).strip()))
-        return out
-    except Exception:
-        return []
-    finally:
-        time.sleep(2)
-
-
-def free_founder(company, people=None):
-    """1) the public 'Employees at' box on the company page, 2) a public web search."""
-    for name, url, title in (people or []):
-        if any(w in title.lower() for w in FOUNDER_WORDS):
-            return {"name": clean_name(name), "first": clean_name(name).split(" ")[0], "url": url, "title": title}
-    return None                                          # no web search: "Find founder ↗" button instead
-    words = [w for w in re.findall(r"[a-z0-9]+", company.lower()) if len(w) > 2][:3]
-    for url, title in ddg_search(f'"{company}" founder OR CEO OR owner site:linkedin.com/in'):
-        if "linkedin.com/in/" not in url:
-            continue
-        t = title.lower()
-        if not any(w in t for w in FOUNDER_WORDS) or not all(w in t for w in words[:2]):
-            continue                                       # must be a founder-type title AT this company
-        parts = [x.strip() for x in re.split(r"\s[-|–]\s", title)]
-        name = clean_name(parts[0])
-        if 2 <= len(name.split()) <= 4:
-            return {"name": name, "first": name.split(" ")[0], "url": url.split("?")[0],
-                    "title": parts[1] if len(parts) > 1 else ""}
-    return None
-
-
-def linkedin_company_url(company):
-    return "https://www.linkedin.com/search/results/companies/?keywords=" + quote(company)
-
-
-def _old_linkedin_company_url(company):
-    for url, title in ddg_search(f'"{company}" site:linkedin.com/company'):
-        if "linkedin.com/company/" in url and norm(company)[:8] in norm(title):
-            return url.split("?")[0]
-    return ""
-
-
-# ---------- Upwork GHL leads (Apify), named clients only ----------
-UPWORK_ENABLED = True
-UPWORK_ACTOR = "flash_mage~upwork"
-UPWORK_QUERIES = ["GoHighLevel", "HighLevel", "GHL"]
-UPWORK_LIMIT = 95                        # newest GHL jobs checked per day (about $0.30, the whole Apify budget)
-UPWORK_COST_CAP_USD = 0.30
-UPWORK_RECONTACT_DAYS = 30               # a past Upwork client posting a NEW GHL job after 30+ days is contacted again
-FOUNDER_LOOKUP = False                   # paid founder search off: you find founders on LinkedIn ("Find founder" link)
-GHL_SKILLS = [("funnels", ["funnel"]), ("workflows", ["workflow", "automation"]), ("pipelines", ["pipeline"]),
-              ("SMS follow-ups", ["sms", "text follow"]), ("email campaigns", ["email marketing", "email campaign",
-              "email sequence", "newsletter"]), ("calendars", ["calendar", "appointment"]),
-              ("landing pages", ["landing page"]), ("integrations", ["zapier", "make.com", "webhook", "api"]),
-              ("A2P setup", ["a2p", "10dlc"]), ("lead follow-up", ["lead follow", "follow-up", "nurture"]),
-              ("CRM management", ["crm"])]
-NOT_A_NAME = {"growth", "digital", "email", "content", "performance", "social", "affiliate", "b2b", "paid",
-              "inbound", "outbound", "real", "full", "part", "senior", "junior", "new", "local", "online", "sales",
-              "lead", "funnel", "automation", "marketing", "seo", "ai", "virtual", "executive", "medical", "custom",
-              "we", "i", "our", "this", "the", "you", "your", "gohighlevel", "highlevel", "ghl", "upwork",
-              "meta", "google", "facebook", "zapier", "make", "hubspot", "crm", "looking", "about", "company",
-              "seeking", "hiring", "remote", "ideal", "responsibilities", "requirements", "us", "it", "they"}
-
-
-def get_path(d, path, default=None):
-    for k in path.split("."):
-        if not isinstance(d, dict):
-            return default
-        d = d.get(k)
-    return default if d is None else d
-
-
-GENERIC_WORDS = set("""a an and the of for to in on at by with we us our you your i me my they it this that these
-there here who what when where why how very important short below above overview job role position title
-looking hiring seeking need needed help about company business team operations marketing sales growth
-digital assistant manager specialist expert support services service solutions systems group agency media
-labs studio partners consulting holdings llc inc ltd co founder owner ceo real estate remote full part time
-long term ongoing new local online virtual executive medical custom lead leads funnel automation ai seo
-summary description responsibilities requirements qualifications benefits compensation details project
-apply application proposal note please thank thanks hello hi welcome intro introduction background mission
-key what's we're you'll we've it's let's value values vision culture story offer stack full-stack
-who what why how""".split())
-
-
-def client_name(desc):
-    """Only returns a name the job post itself states, and only if it looks like a real company name."""
-    pats = [
-        r"(?im)^\s*company\s*:\s*([A-Z][^\n]{1,50})$",
-        r"(?m)^\s*About\s+([A-Z][\w&'.-]*(?:\s+[A-Z&][\w&'.-]*){0,4})\s*$",
-        r"\b([A-Z][\w&'.-]*(?:\s+(?:[A-Z&][\w&'.-]*|of|and)){0,4}\s+(?:LLC|Inc\.?|Ltd\.?|Co\.|Group|Solutions|"
-        r"Systems|Agency|Media|Marketing(?: AI)?|Realty|Remodeling|Labs|Wellness|Partners|Holdings|Consulting|Studio))\b",
-        r"(?m)(?:^|[.!?]\s+)([A-Z][\w&'.-]*(?:\s+(?:[A-Z&][\w&'.-]*|of|and)){0,4})\s+(?:is|are|seeks|helps|"
-        r"connects|has been|specializes|was founded)\b",
-    ]
-    for p in pats:
-        for m in re.finditer(p, desc):
-            name = re.sub(r"\s+", " ", m.group(1)).strip(" .,:")
-            first = name.split(" ")[0].lower()
-            if first in NOT_A_NAME or len(name) < 3 or name.lower() in NOT_A_NAME:
-                continue
-            tokens = [t.lower().strip("'’&.,") for t in re.split(r"[\s-]+", name)]
-            if tokens and tokens[0] in GENERIC_WORDS:
-                continue                                   # "What We Value We", "Our Team" ...
-            distinctive = [t for t in tokens if t and t not in GENERIC_WORDS]
-            if not distinctive:
-                continue                                   # e.g. "Very Important We", "There", "Below"
-            confirmed = (p == pats[0] or p == pats[2] or
-                         len(re.findall(re.escape(name.split(" ")[0]), desc)) >= 2)
-            if confirmed:
-                return name
-    return ""
-
-
-def proposal_keyword(desc):
-    """Many posts say 'Start your proposal with the word X'. We put X first, as asked."""
-    m = re.search(r"(?i)(?:start|begin)\s+(?:your|the)\s+(?:proposal|application|cover letter|response)[^.\n]{0,30}?"
-                  r"(?:with|using)\s+(?:(?:the\s+)?(?:word|words|phrase)s?)?\s*:?\s*([\s\S]{0,70})", desc)
-    if not m:
+def text(value):
+    if value is None:
         return ""
-    tail = m.group(1)
-    q = re.search(r"[\"“'‘]\s*([^\"”'’\n]{2,50}?)\s*[.,!]?\s*[\"”'’]", tail)
-    if q:
-        return q.group(1).strip(" .,")
-    caps = re.match(r"\s*([A-Z][A-Z0-9' ]{1,40}[A-Z0-9])\b", tail)
-    return caps.group(1).strip() if caps else ""
-
-
-def commission_heavy(desc):
-    d = desc.lower()
-    return "commission" in d and bool(re.search(r"commission[- ]only|base pay|\$\s?[1-9](?:\.\d+)?\s*/\s*h(?:ou)?r|"
-                                                  r"\$\s?\d{2,3}\s*/\s*month base", d))
-
-
-UPWORK_STATS = {"checked": 0, "named": 0, "new": 0}
-
-
-def upwork_link(it):
-    """The job's Upwork link. Some results come without one: then an Upwork search for that exact title,
-    so the row is never dropped by the Sheet (it needs a link)."""
-    link = str(it.get("link") or it.get("url") or "")
-    if link.startswith("http"):
-        return link
-    cipher = str(it.get("ciphertext") or get_path(it, "data.opening.ciphertext", "") or "")
-    if cipher:
-        return "https://www.upwork.com/jobs/" + (cipher if cipher.startswith("~") else "~" + cipher)
-    return "https://www.upwork.com/nx/search/jobs/?q=" + requests.utils.quote(str(it.get("title") or "GoHighLevel"))
-
-
-def upwork_leads(today, start_rank):
-    if not (UPWORK_ENABLED and APIFY_TOKEN):
-        return []
-    body = {"query": UPWORK_QUERIES, "limit": UPWORK_LIMIT, "sort": "newest", "hourly": True, "fixed": False,
-            "project_length": ["ongoing"], "location_subregions": ["Northern America"]}
     try:
-        items = apify_run_actor(UPWORK_ACTOR, body, UPWORK_COST_CAP_USD)
-    except Exception as e:
-        print("Upwork lookup failed:", e)
-        return []
-    leads, seen = [], set()
-    for it in items:
-        desc = str(get_path(it, "data.opening.description", "") or "")
-        country = str(get_path(it, "buyer.location.country", "") or "")
-        region = "USA" if country in ("USA", "United States") else ("Canada" if country == "Canada" else "")
-        size = get_path(it, "buyer.company.profile.size")
-        spent = get_path(it, "buyer.stats.totalCharges.amount", 0) or 0
-        verified = get_path(it, "buyer.isPaymentMethodVerified", True)
-        if not verified or float(spent or 0) < 100:
-            continue                                       # only clients who have actually paid freelancers
-        name = client_name(desc)
-        title = str(it.get("title") or "")
-        # Senior / Lead / Manager titles are allowed on Upwork (remote by nature)
-        if not (desc and region and name) or commission_heavy(desc):
-            continue                                       # named clients only, no commission-heavy posts
-        if isinstance(size, (int, float)) and size > MAX_COMPANY_SIZE:
-            continue
-        if norm(name) in seen:
-            continue
-        seen.add(norm(name))
-        d = desc.lower()
-        skills = [n for n, words in GHL_SKILLS if any(w in d for w in words)][:3]
-        leads.append({"company": name, "region": region, "size": str(int(size)) if isinstance(size, (int, float)) else "Unknown",
-                      "title": str(it.get("title") or "GoHighLevel role"), "url": upwork_link(it),
-                      "skills": skills, "keyword": proposal_keyword(desc), "desc": desc})
-    print(f"Upwork: {len(items)} GHL jobs checked, {len(leads)} with a named client")
-    UPWORK_STATS.update({"checked": len(items), "named": len(leads)})
-    return leads
+        if pd.isna(value):
+            return ""
+    except (TypeError, ValueError):
+        pass
+    return str(value)
 
 
-def upwork_proposal(lead, first):
-    skills = lead["skills"] or ["your GoHighLevel setup"]
-    s_txt = skills[0] if len(skills) == 1 else ", ".join(skills[:-1]) + " and " + skills[-1]
-    top = f"{lead['keyword']}\n\n" if lead["keyword"] else ""
-    hi = f"Hi {first}," if first else "Hi there,"
-    return (f"{top}{hi}\n\nYou need someone to own {s_txt} in GoHighLevel long term, and that is exactly the "
-            f"work our GHL specialists do every day.\n\nI'm Usama, founder of Vogent Labs. We place dedicated "
-            f"GoHighLevel specialists who join your team in days, not weeks, and stay with you long term, at a much "
-            f"lower cost than a local hire. We handle everything on our side, so it stays hassle free for you.\n\n"
-            f"Quick question so I can match the right person: what is the one thing this hire must get right in the "
-            f"first 30 days?\n\nUsama")
-
-
-def upwork_messages(lead, first):
-    """Upwork clients are contacted on LinkedIn, so they get the same sequence as LinkedIn rows,
-    written for GoHighLevel: connection note, DM after accept, follow-up 1, follow-up 2."""
-    first = fix_case(first)
-    company = clean_company(lead["company"])
-    skills = [x for x in lead.get("skills") or [] if x]
-    note = (f"Hi {first}, " if first else "Hi, ") + (
-        f"noticed {company} is hiring for GoHighLevel help. Curious, have you found the right person out of the "
-        f"applicants yet, or still going through them? Thought it'd be good to connect!")
-    if len(note) > 300:
-        note = note[:297].rsplit(" ", 1)[0] + "..."
-    sk = join_skills(skills[:3])
-    who = (f"We work with remote professionals experienced in GoHighLevel, {sk}." if sk
-           else "We work with remote GoHighLevel specialists who do this work every day.")
-    dm = (f"Thanks for connecting, {first}!" if first else "Thanks for connecting!") + \
-        f" Saw your GoHighLevel opening at {company}. {who} Would it help to see a couple of profiles that match your post?"
-    hard = (f"finding someone strong in both GoHighLevel and {skills[0]} is not easy" if skills
-            else "finding a strong GoHighLevel specialist is not easy")
-    fu1 = (f"{'Hi ' + first if first else 'Hi'}, {hard}, which is why I reached out. I run Vogent Labs, where we "
-           f"help businesses hire dedicated remote professionals at a much lower cost than a local hire. "
-           f"Happy to share a couple of profiles that match your GoHighLevel post if useful.")
-    fu2 = (f"{'Hey ' + first if first else 'Hi'}, checking back on the GoHighLevel opening. If you're still hiring, "
-           f"I'd be happy to share a couple of relevant profiles. If you've already filled it, no worries at all!")
-    return [note, dm, fu1, fu2]
-
-
-def upwork_note(lead, first):
-    skills = lead["skills"][:2]
-    s_txt = " and ".join(skills) if skills else "GoHighLevel"
-    hi = f"Hi {first}," if first else "Hi,"
-    note = (f"{hi} saw {lead['company']} is looking for GoHighLevel help with {s_txt}. How is the search going "
-            f"so far? Would be glad to connect.")
-    return note if len(note) <= 300 else note[:297].rsplit(" ", 1)[0] + "..."
-
-
-# ---------- 3. Messages ----------
-def specialists(lead, table):
-    if lead.get("category") == "CRM Automation":
-        blob = (str(lead.get("priority")) + " " + str(lead.get("title")) + " " + str(lead.get("skills"))).lower()
-        if "ghl" in blob or "highlevel" in blob:
-            return "GoHighLevel specialists"
-        if "hubspot" in blob:
-            return "HubSpot specialists"
-        return "CRM and automation specialists"
-    return table.get(lead.get("category"), "remote specialists")
-
-
-def article(role):
-    first = role.split(" ")[0] if role else ""
-    if first.isupper() and len(first) > 1:                 # acronyms: "an SEO", "an SDR", "a CRM"
-        return ("an " if first[0] in "AEFHILMNORSX" else "a ") + role
-    return ("an " if role[:1].lower() in "aeiou" else "a ") + role
-
+ROLE_NOUN = re.compile(r"\b(?:specialist|manager|coordinator|assistant|rep|representative|associate|executive|"
+                       r"writer|designer|editor|bookkeeper|accountant|clerk|agent|strategist|analyst|developer|"
+                       r"admin|administrator|officer|expert|consultant|marketer|producer|creator|technician|"
+                       r"generalist|setter|caller|virtual assistant)s?\b", re.I)
 
 
 def is_emoji_char(ch):
-    """Emojis and picture symbols only; letters and normal punctuation like @ & . stay (same as find_leads.py)."""
+    """Emojis and picture symbols only; letters and normal punctuation like @ & . stay."""
     o = ord(ch)
     return unicodedata.category(ch) in ("So", "Cs") or 0xFE00 <= o <= 0xFE0F or o == 0x200D or 0x1F000 <= o <= 0x1FAFF
 
 
-def fix_case(name):
-    """'ALI' or 'ali' -> 'Ali'; names already in normal case stay as they are ('McKenzie')."""
-    name = str(name or "").strip()
-    if name and (name.isupper() or name.islower()):
-        return "-".join(part.capitalize() for part in name.split("-"))
-    return name
-
-
 def clean_company(name):
-    """Company name for messages: drops emojis and decorative symbols (same as find_leads.py)."""
+    """Company name for messages: drops emojis and decorative symbols ("Citizen Agency 🐻" -> "Citizen Agency")."""
     out = "".join(ch for ch in str(name or "") if not is_emoji_char(ch))
     return re.sub(r"\s{2,}", " ", out).strip() or str(name or "").strip()
 
 
-def msg_role(lead):
-    """Short role used in every message. Virtual Assistant roles are never called VA."""
-    if lead.get("category") == "Virtual Assistant":
-        return "assistant"
-    role = re.sub(r"virtual assistant", "assistant", lead.get("role") or "", flags=re.I).strip()
-    role = re.sub(r"^(?:(?:remote|hybrid|part[- ]time|full[- ]time|freelance|contract|temporary|temp)\s+)+", "",
-                  role, flags=re.I).strip() or role          # also cleans leads found before this change
-    if len(role) > 45:                                       # never end on "and", "of", "&" ...
-        words = role[:45].rsplit(" ", 1)[0].split(" ")
-        while len(words) > 1 and words[-1].lower() in ("and", "or", "&", "of", "for", "with", "to", "the", "a", "an", "in"):
-            words.pop()
-        role = " ".join(words)
-    return role or "open"
+def short_role(title):
+    clean = re.sub(r"^[^\w]+", "", title)                       # drop leading emojis/symbols
+    clean = re.sub(r"^(?:remote|hybrid|on-?site)\s*[|:\-–—]\s*", "", clean, flags=re.I)  # "Remote | ..."
+    clean = re.split(r"\s+@\s+|\s+at\s+[A-Z]", clean)[0]          # "... @ Company" / "... at Company"
+    # "Paid Search / Paid Social Specialist": keep both halves when only the second half names the role
+    halves = re.split(r"\s+/\s+", clean)
+    if len(halves) > 1 and not ROLE_NOUN.search(halves[0]) and ROLE_NOUN.search(halves[1]):
+        clean = "/".join(halves[:2])
+    role = re.split(r"\s+[-|–—/]\s+|\s*\||\(|\[|,|:", clean)[0].strip()
+    # "Remote Bookkeeper" -> "Bookkeeper" (work type is already its own column; reads better in messages)
+    bare = re.sub(r"^(?:(?:remote|hybrid|part[- ]time|full[- ]time|freelance|contract|temporary|temp)\s+)+", "",
+                  role, flags=re.I).strip()
+    return bare or role or clean
 
 
-# Skills used in messages (the Leads tab keeps the full list as found):
-# named tools first (GoHighLevel, QuickBooks...), then specific tasks, vague words last or dropped.
-GENERIC_SKILLS = {"research", "scheduling", "social media", "data entry", "workflows", "calendar management",
-                  "inbox management", "dashboards"}
-# Role-typical skills when a job post has no usable skills (messages only)
-DEFAULT_SKILLS = {
-    "CRM Automation": ["CRM setup", "automations", "pipeline management"],
-    "SEO": ["on-page SEO", "keyword research", "Search Console"],
-    "Performance Marketing": ["Google Ads", "Meta Ads", "conversion tracking"],
-    "Customer Service": ["ticketing", "live chat", "phone support"],
-    "Bookkeeping": ["QuickBooks", "reconciliations", "month-end close"],
-    "Lead Generation": ["prospecting", "lead lists", "appointment setting"],
-    "Social Media": ["Instagram", "TikTok", "content calendars"],
-    "Content Writing": ["blog posts", "SEO writing", "copywriting"],
-    "Email Marketing": ["email campaigns", "automated flows", "list segmentation"],
-    "Design & Video": ["Photoshop", "Canva", "video editing"],
-    "Website Support": ["WordPress", "site updates", "landing pages"],
-    "Virtual Assistant": ["calendar management", "inbox management", "travel booking"],
+def trim_role(role, limit=45):
+    """Shortens a very long role at a word break and never ends on 'and', 'of', '&' and similar."""
+    if len(role) <= limit:
+        return role
+    words = role[:limit].rsplit(" ", 1)[0].split(" ")
+    while len(words) > 1 and words[-1].lower() in ("and", "or", "&", "of", "for", "with", "to", "the", "a", "an", "in"):
+        words.pop()
+    return " ".join(words)
+
+
+def evidence(desc, regexes):
+    for r in regexes:
+        m = r.search(desc)
+        if m:
+            snippet = desc[max(0, m.start() - 80): m.start() + 120]
+            return "..." + re.sub(r"\s+", " ", snippet) + "..."
+    return "(matched in title)"
+
+
+VA_TITLE_RE = re.compile(r"assistant|\bva\b|\bea\b|secretar|admin", re.I)
+# Virtual-assistant companies and their wording: they hire VAs to place with their own clients
+VA_AGENCY_NAME_RE = re.compile(r"virtual|assistan|\bva\b|\bvas\b|outsourc|offshore|remote (?:staff|team|talent)|"
+                               r"delegat|belay|boldly|prialto|time etc|wing\b|myoutdesk|athena|zirtual|cyberbacker|"
+                               r"uassist|equivity|persona|pearl talent|somewhere|hire ?smart|magic|support ninja|"
+                               r"\bbpo\b|solutions?$|services?$", re.I)
+VA_AGENCY_DESC_RE = re.compile(r"our clients|multiple clients|matched with (?:a |an )?(?:client|executive|business)|"
+                               r"placed with|support (?:a |our )?(?:busy )?(?:clients?|executives) (?:across|in)|"
+                               r"client portfolio|join our (?:team|network|community) of (?:virtual )?assistants|"
+                               r"we (?:match|connect|pair)|talent (?:pool|network|community)|our network of|"
+                               r"assigned to (?:a |one of our )?clients?", re.I)
+
+
+def is_agency(company, industry, desc, title=""):
+    c, ind, d = company.lower(), industry.lower(), desc.lower()
+    if VA_TITLE_RE.search(title) and (VA_AGENCY_NAME_RE.search(company) or VA_AGENCY_DESC_RE.search(desc)):
+        return True                              # VA / EA roles: direct hires only
+    if IT_STAFFING_NAME_RE.search(company) and re.search(r"consultant|developer|engineer|architect", title, re.I):
+        return True                              # IT services firm placing someone at its client
+    if "staffing" in ind or "recruit" in ind:
+        return True
+    if any(re.search(r"\b" + re.escape(b) + r"\b", c) for b in AGENCY_BLOCKLIST):
+        return True
+    if any(w in c for w in AGENCY_NAME_WORDS):
+        return True
+    return any(p in d for p in AGENCY_PHRASES)
+
+
+def is_english(desc):
+    if len(desc) < 80:
+        return True  # too short to judge, keep it
+    try:
+        return detect(desc[:3000]) == "en"
+    except Exception:
+        return True
+
+
+def needs_other_language(desc):
+    for sentence in re.split(r"(?<=[.!?\n])\s+", desc):
+        langs = [m for m in LANG_RE.finditer(sentence.strip())
+                 if not (m.group(1) == "Polish" and m.start() == 0)]  # "Polish your..." is a verb
+        if not langs:
+            continue
+        low = sentence.lower()
+        if any(w in low for w in REQUIRE_WORDS) and not any(w in low for w in PLUS_WORDS):
+            return True
+    return False
+
+
+def strict_agency(company, industry, desc):
+    d, ind = desc.lower(), industry.lower()
+    return (is_agency(company, industry, desc) or any(w in ind for w in STRICT_INDUSTRY_WORDS)
+            or any(p in d for p in STRICT_AGENCY_PHRASES))
+
+
+# Senior roles are skipped everywhere (small companies rarely outsource them)
+SENIOR_RE = re.compile(r"\b(senior|sr|lead|head|director|vp|vice president|chief|principal|staff|manager)\b", re.I)
+
+
+def is_senior(title):
+    return bool(SENIOR_RE.search(title))
+
+
+# Jobs that can't be done remotely, and roles we don't staff
+NOT_REMOTE_TITLE_RE = re.compile(r"\b(retail|in[- ]store|store|cashier|receptionist|front desk|barista|"
+                                 r"warehouse|driver|server|host|hostess)\b", re.I)
+OFF_TARGET_TITLE_RE = re.compile(r"\b(account executive|engineer|strategist|"
+                                 r"sales representative|sales rep|account manager|business development manager|"
+                                 r"founding|controller)\b", re.I)
+# The CRM category only counts real CRM jobs (not sales roles that just mention HubSpot)
+CRM_TITLE_RE = re.compile(r"crm|hubspot|highlevel|high level|\bghl\b|automation|funnel|email marketing|"
+                          r"marketing operations|marketing ops", re.I)
+GHL_RE = re.compile(r"go\s?high\s?level|\bhighlevel\b|\bghl\b|lead\s?connector", re.I)
+# No budget behind these: interns, volunteers, students
+NO_BUDGET_TITLE_RE = re.compile(r"\b(intern|interns|internship|volunteer|apprentice|apprenticeship|student|"
+                                r"fellowship)\b", re.I)
+# Gig listings dressed up as jobs ("Expert Opportunity ... $70/hr", "Publish Book in 2 weeks")
+GIG_TITLE_RE = re.compile(r"expert opportunity|\$\s?\d+(?:\.\d+)?\s?(?:/|per\s)\s?(?:hr|hour)\b|"
+                          r"publish (?:a |your )?book|\bbook author\b", re.I)
+# "Can we staff this?" The title must look like the work its category covers.
+# General marketing and communications roles count for every marketing category.
+MARKETING_GENERAL = (r"\bmarketing\b|\bmarketer\b|\bcontent\b|digital (?:marketing|media)|growth market|demand gen|"
+                     r"brand(?:ing)? (?:specialist|coordinator|assistant|associate|executive)|"
+                     r"media (?:coordinator|specialist|assistant|associate|executive)|publishing coordinator|"
+                     r"communications?\s*(?:&|and)?\s*(?:marketing\s+)?"
+                     r"(?:coordinator|specialist|assistant|associate|executive|officer)")
+ROLE_FIT = {
+    "SEO": r"seo|\bgeo\b|\baeo\b|search|link ?build|backlink|organic|keyword|" + MARKETING_GENERAL,
+    "Performance Marketing": r"paid|ppc|\bsem\b|ads\b|media buy|media plan|performance|advertising|ad ops|acquisition|influencer|"
+                             + MARKETING_GENERAL,
+    "Customer Service": r"customer|client (?:support|service|success|care|experience)|support|help ?desk|"
+                        r"care (?:associate|agent|coordinator|representative)|call cent|contact cent|chat|"
+                        r"member services|patient (?:coordinator|services|care)|guest|reservation|concierge|"
+                        r"service (?:representative|rep|associate|agent|coordinator)",
+    "Bookkeeping": r"bookkeep|account|fiscal|financ|revenue|receivabl|payabl|payroll|billing|treasur|\btax\b|"
+                   r"quickbooks|xero|reconcil|invoic|ledger|\bap\b|\bar\b",
+    "Virtual Assistant": r"assistant|virtual|admin|secretar|data entry|clerk|office (?:coordinator|manager)|"
+                         r"operations (?:coordinator|associate)|scheduler|dispatch|admin(?:istrative)? coordinator",
+    "Lead Generation": r"lead gen|appointment|setter|cold call|outbound|prospect|lead research|list build|"
+                       r"sales development|\bsdr\b|\bbdr\b|business development rep|"
+                       r"data research|\bbdc\b|telemarket|telesales|scheduler|sales (?:assistant|coordinator|support)|" + MARKETING_GENERAL,
+    "Social Media": r"social|community (?:manager|coordinator|specialist)|community (?:&|and) engagement|content creator|"
+                    r"tiktok|instagram|\bugc\b|influencer|creative|e[- ]?commerce|" + MARKETING_GENERAL,
+    "Content Writing": r"writ|copy|blog|editor|proofread|" + MARKETING_GENERAL,
+    "Email Marketing": r"email|klaviyo|newsletter|lifecycle|retention|marketing automation|\bcrm\b|e[- ]?commerce|" + MARKETING_GENERAL,
+    "Design & Video": r"design|video|graphic|motion|animat|editor|illustrat|creative|\bui\b|\bux\b|3d|thumbnail|"
+                      r"photograph|visual|multimedia|producer|courseware|e-?learning|content creator",
+    "Website Support": r"web|wordpress|shopify|webflow|\bsite\b|\bcms\b|landing page|wix|squarespace|front.?end|"
+                       r"html|e[- ]?commerce",
 }
+ROLE_FIT_RE = {k: re.compile(v, re.I) for k, v in ROLE_FIT.items()}
+# Extra outsourceable work not covered above (automation, CRM, developers)
+ANY_FIT_RE = re.compile(r"automation|\bcrm\b|hubspot|highlevel|\bghl\b|zapier|n8n|developer|\bai\b|"
+                        r"chatbot|operations (?:assistant|coordinator|specialist)|project coordinator|recruit(?:ing|ment) coordinator", re.I)
+# Never our kind of hire, whatever the category
+NOT_STAFFABLE_RE = re.compile(r"\b(analyst|reporter|journalist|technician)\b", re.I)
 
 
-# Words that belong to each field, so a Bookkeeper's hook never says "returns and refunds"
-SKILL_FIELD = {
-    "CRM Automation": r"crm|hubspot|highlevel|ghl|zapier|\bmake\b|automation|workflow|pipeline|funnel|salesforce|"
-                      r"zoho|keap|activecampaign|pipedrive|\bsms\b|email",
-    "SEO": r"seo|keyword|backlink|link build|search console|ahrefs|semrush|on-page|technical|content|analytics|\bga4\b",
-    "Performance Marketing": r"\bads\b|ppc|google|meta|facebook|tiktok|\bga4\b|analytics|conversion|campaign|"
-                             r"bidding|roas|\bsem\b|tracking|media",
-    "Customer Service": r"support|ticket|zendesk|freshdesk|gorgias|intercom|chat|phone|returns|refunds|order|"
-                        r"customer|crm|help|shopify",
-    "Bookkeeping": r"quickbooks|xero|invoic|payable|receivable|reconcil|payroll|month-end|financial|ledger|"
-                   r"billing|\btax\b|accounting|sage|netsuite|expense|excel",
-    "Lead Generation": r"\blead|prospect|apollo|linkedin|sales navigator|cold|outreach|appointment|crm|\blist|email",
-    "Social Media": r"social|instagram|tiktok|facebook|linkedin|content|canva|community|reels|\bugc\b|analytics|"
-                    r"copywriting|video",
-    "Content Writing": r"writ|copy|blog|seo|content|\bedit|proofread|wordpress|newsletter",
-    "Email Marketing": r"email|klaviyo|mailchimp|flows|automation|segmentation|newsletter|copy|campaign|hubspot",
-    "Design & Video": r"photoshop|illustrator|figma|canva|after effects|premiere|video|motion|design|brand|\b3d\b|"
-                      r"blender|landing page|\bui\b|\bux\b|indesign|editing|animation",
-    "Website Support": r"wordpress|shopify|webflow|wix|squarespace|html|css|landing page|\bsite\b|elementor|seo|"
-                       r"javascript|php",
-    "Virtual Assistant": r"calendar|inbox|email|data entry|scheduling|travel|admin|crm|google workspace|excel",
-}
+def best_category(title, category):
+    """Category label from the job title (the search that found it can be a different one)."""
+    if category in ("CRM Automation", "AI Automation"):
+        return category
+    if category == "Remote Boards":
+        return "CRM Automation"                  # remote boards only bring GHL / HubSpot / CRM jobs
+    if ROLE_FIT_RE.get(category) and ROLE_FIT_RE[category].search(title):
+        return category
+    for cat, rx in ROLE_FIT_RE.items():
+        if rx.search(title):
+            return cat
+    if re.search(r"automation|zapier|n8n|\bai\b|chatbot", title, re.I):
+        return "AI Automation"
+    if re.search(r"\bcrm\b|hubspot|highlevel|\bghl\b", title, re.I):
+        return "CRM Automation"
+    if re.search(r"developer|programmer", title, re.I):
+        return "Website Support"
+    return "CRM Automation" if category == "Remote Boards" else category
 
 
-def skill_list(lead):
-    """Skills for messages: the role's own field first (tools first), role-typical skills fill any gap,
-    vague words last. The Leads tab keeps the full list as found."""
-    raw = [x.strip() for x in str(lead.get("skills") or "").split(" · ") if x.strip()]
-    cat = lead.get("category")
-    field = re.compile(SKILL_FIELD[cat], re.I) if cat in SKILL_FIELD else None
-    generic = lambda x: x.lower() in GENERIC_SKILLS
-    tools_first = lambda xs: [x for x in xs if any(ch.isupper() for ch in x)] + \
-        [x for x in xs if not any(ch.isupper() for ch in x)]
-    own = tools_first([x for x in raw if not generic(x) and (field is None or field.search(x))])
-    if field is not None and len(own) < 2:                       # top up with role-typical skills, after the post's own
-        own += [d for d in DEFAULT_SKILLS.get(cat, []) if d.lower() not in {x.lower() for x in own}]
-    if not own:
-        own = tools_first([x for x in raw if not generic(x)]) or list(DEFAULT_SKILLS.get(cat, [])) or \
-            [x for x in raw if generic(x)]
-    return own
+def wrong_title(title, category, desc=""):
+    """True for roles we should not pitch: in-store, off-target, no budget, gig listings, or not this category's work."""
+    if NOT_REMOTE_TITLE_RE.search(title) or OFF_TARGET_TITLE_RE.search(title):
+        return True
+    if NO_BUDGET_TITLE_RE.search(title) or GIG_TITLE_RE.search(title):
+        return True
+    if category == "CRM Automation":
+        # A job that names GoHighLevel is a GHL lead whatever its title ("Marketing Assistant (GHL)")
+        return not (CRM_TITLE_RE.search(title) or GHL_RE.search(title + " " + desc))
+    if NOT_STAFFABLE_RE.search(title) and not re.search(r"customer", title, re.I):
+        return True
+    if HARD_LOCAL_TITLE_RE.search(title) or NOT_A_HIRE_TITLE_RE.search(title) or NOT_A_HIRE_DESC_RE.search(desc):
+        return True
+    # Any work that can be done from Pakistan counts, whichever search found it
+    return not (any(r.search(title) for r in ROLE_FIT_RE.values()) or ANY_FIT_RE.search(title))
 
 
-def join_skills(skills):
-    if not skills:
-        return ""
-    return skills[0] if len(skills) == 1 else ", ".join(skills[:-1]) + " and " + skills[-1]
+def crm_manager_title(title, category):
+    """'CRM Manager' / 'Marketing Automation Manager': hands-on at small companies, allowed up to 50 staff."""
+    if category != "CRM Automation" or not CRM_TITLE_RE.search(title):
+        return False
+    return not is_senior(re.sub(r"\bmanagers?\b", "", title, flags=re.I))
 
 
-def skill_text(lead):
-    return join_skills(skill_list(lead)[:3])
-
-
-def linkedin_messages(lead, first):
-    """DM after accept, Follow-up 1, Follow-up 2 (one universal sequence for every role)."""
-    first = fix_case(first)
-    role, company = msg_role(lead), clean_company(lead["company"])
-    skills = skill_list(lead)
-    sk3 = join_skills(skills[:3])
-    who = (f"We work with remote professionals experienced in {sk3}." if sk3
-           else "We work with remote professionals who do this kind of work every day.")
-    dm = (f"Thanks for connecting, {first}!" if first else "Thanks for connecting!") + \
-        (f" Saw your {role} opening at {company}. {who} Would it help to see a couple of profiles that match "
-         f"your post?")
-    if len(skills) >= 2:
-        hard = f"finding someone strong in both {skills[0]} and {skills[1]} is not easy"
-    elif skills:
-        hard = f"finding someone really strong in {skills[0]} is not easy"
-    else:
-        hard = f"finding the right {role} is not easy"
-    fu1 = (f"{'Hi ' + first if first else 'Hi'}, {hard}, which is why I reached out. I run Vogent Labs, where we "
-           f"help businesses hire dedicated remote professionals at a much lower cost than a local hire. "
-           f"Happy to share a couple of profiles that match your {role} post if useful.")
-    fu2 = (f"{'Hey ' + first if first else 'Hi'}, checking back on the {role} opening. If you're still hiring, "
-           f"I'd be happy to share a couple of relevant profiles. If you've already filled it, no worries at all!")
-    return [dm, fu1, fu2]
-
-
-def named_note(note, first):
-    first = fix_case(first)
-    if first and note.startswith("Hi,"):
-        candidate = f"Hi {first}," + note[3:]
-        if len(candidate) <= 300:                          # LinkedIn Premium limit
-            return candidate
-    return note
-
-
-def founder_search_url(company, company_url=""):
-    """Opens the company's own LinkedIn People page; a search only if we have no company page."""
-    if slug(company_url):
-        return "https://www.linkedin.com/company/" + slug(company_url) + "/people/"
-    return ("https://www.linkedin.com/search/results/companies/?keywords=" + quote(company))
-
-
-# ---------- 4. Email: find a real address on the company's own website (free) ----------
-EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
-BAD_LOCAL = ["noreply", "no-reply", "donotreply", "privacy", "legal", "abuse", "webmaster", "postmaster",
-             "delete", "remove", "request", "help", "dataprotection", "dpo", "optout", "opt-out",
-             "clerk", "records", "regulatory", "accessibility", "submit",
-             "unsubscribe", "billing", "invoice", "accounts", "example", "test", "user", "email", "name",
-             "yourname", "press", "media", "dmca", "security", "compliance", "gdpr",
-             "enroll", "admission", "orders", "booking", "reservation", "donate", "donation", "membership",
-             "members", "events", "bug", "training", "learning", "course", "academy"]
-BAD_DOMAIN = ["example.com", "domain.com", "sentry", "wixpress", "godaddy", "squarespace", "wordpress",
-              "email.com", "yourdomain", "company.com", "mysite", "schema.org", "w3.org"]
-HIRING_LOCAL = ["careers", "career", "jobs", "job", "hr", "hiring", "recruit", "talent", "people", "work",
-                "applications", "apply"]
-GENERAL_LOCAL = ["hello", "hi", "info", "contact", "team", "office", "admin", "sales", "inquiries",
-                 "enquiries", "connect", "mail", "general"]
-SKIP_LOCAL_WORDS = ["sales", "ventas", "vendor", "intl", "practice", "partner", "support", "service",
-                    "billing", "order", "shop", "store", "press", "media", "marketing", "accounts", "invoice"]
-LAST_RESORT_LOCAL = ["support", "help", "care", "service", "customerservice", "orders", "shop", "store"]
-DEPARTMENT_WORDS = ["marketing", "art", "design", "creative", "studio", "partners", "partnerships",
-                    "business", "newbusiness", "growth", "ops", "operations", "finance", "booking",
-                    "bookings", "reservations", "events", "membership", "members", "social", "digital",
-                    "web", "dev", "tech", "it", "ask", "enquiry", "inquiry", "questions", "feedback",
-                    "contactus", "appointments", "reception", "frontdesk", "staff", "media", "pr",
-                    "brand", "content", "projects", "studio", "agency", "accounts", "billing"]
-PAGES = ["", "contact", "contact-us", "about", "about-us", "team", "our-team", "careers", "jobs"]
-UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                    "(KHTML, like Gecko) Chrome/126 Safari/537.36"}
-
-
-def root_domain(url):
-    host = re.sub(r"^https?://", "", str(url or "")).split("/")[0].lower()
-    host = host.split(":")[0]
-    return host[4:] if host.startswith("www.") else host
-
-
-def find_email(website):
-    """Returns (email, kind) where kind is personal / hiring / general, or ("", "")."""
-    domain = root_domain(website)
-    if not domain:
-        return "", ""
-    base = "https://" + domain
-    found = set()
-    for page in PAGES:
+def title_not_english(title):
+    """Catches titles like 'Intégrateur(trice) web' or 'German and English Speaking'."""
+    if needs_other_language(title) or LANG_RE.search(title):
+        return True
+    words = re.findall(r"[^\W\d_]+", title)
+    if len(words) >= 3 and re.search(r"[À-ÿ]", title):
         try:
-            r = requests.get(f"{base}/{page}", headers=UA, timeout=10, allow_redirects=True)
-            if r.status_code != 200:
-                continue
-            html = r.text.replace("[at]", "@").replace("(at)", "@").replace("&#64;", "@")
-            for e in EMAIL_RE.findall(html):
-                found.add(e.strip(".").lower())
+            return detect(title) != "en"
         except Exception:
-            continue
-        finally:
-            time.sleep(0.5)
-        if len(found) >= 5:
-            break
-    good = []
-    for e in found:
-        local, _, dom = e.partition("@")
-        if any(b in local for b in BAD_LOCAL) or any(b in dom for b in BAD_DOMAIN):
-            continue
-        if re.search(r"\.(png|jpe?g|gif|svg|webp|css|js)$", e) or len(local) > 40:
-            continue
-        if not (dom.endswith(domain) or domain.endswith(dom)):
-            continue                                            # only the company's own domain
-        head = re.split(r"[._-]", local)[0]
-        if head in ("pr", "press", "media", "news", "foia"):
-            continue
-        if local in HIRING_LOCAL or any(local.startswith(h) for h in HIRING_LOCAL):
-            kind, rank = "hiring", 1
-        elif local in GENERAL_LOCAL and local not in ("sales", "admin"):
-            kind, rank = "general", 2
-        elif any(w in local for w in SKIP_LOCAL_WORDS) or head in DEPARTMENT_WORDS or head in GENERAL_LOCAL:
-            continue                                            # sales@, ventas@, vendors@, support@, team.px@ ...
-        elif re.fullmatch(r"[a-z]{3,15}(\.[a-z]{2,20})?", local):
-            kind, rank = "personal", 0
-        else:
-            continue
-        good.append((rank, e, kind))
-    if not good:
-        return "", ""
-    _, email, kind = sorted(good)[0]
-    return email, kind
+            return False
+    return False
 
 
-BLOCKED_DOMAINS = set()                  # bounced or opted-out domains, never emailed again
+def location_locked(title, location, desc):
+    blob = title + " | " + location + " | " + desc
+    return any(p.search(blob) for p in LOCATION_LOCK_PATTERNS)
 
 
-def email_cap(today):
-    return EMAIL_DAILY
+REMOTE_WORDS = ["remote", "work from home", "work-from-home", "wfh", "work from anywhere",
+                "fully distributed", "distributed team", "telecommute", "telecommuting"]
 
 
-def _old_email_cap(today):
+def decide_work(row, title, desc, page_tag="", remote_hit=False):
+    """Work type. Office or hybrid wording always wins (never pitched).
+    Remote when ANY of these is true (and no office / hybrid wording):
+      LinkedIn's own tag says Remote, the job location says Remote, the title says Remote,
+      the description uses a clear remote phrase, or the site's Remote filter returned it AND the text mentions remote.
+    One vague signal alone -> 'Not confirmed' (Leads tab only, never pitched)."""
+    if page_tag in ("On-site", "Hybrid"):
+        return page_tag
+    d = (title + " " + desc).lower()
+    rem = any(p in d for p in STRONG_REMOTE)
+    on = any(p in d for p in STRONG_ONSITE) or bool(STRONG_ONSITE_RE.search(d))
+    hy = any(p in d for p in STRONG_HYBRID) or (bool(re.search(r"\bhybrid\b", d)) and not rem) or \
+        bool(re.search(r"\d\s*days?\s*(?:a|per)?\s*(?:week\s*)?(?:in|at|from)\s*(?:the|our)?\s*office", d))
+    if hy:
+        return "Hybrid"
+    if on and not rem:
+        return "On-site"
+    loc_remote = "remote" in text(row.get("location")).lower() or str(row.get("is_remote")).lower() == "true" \
+        and text(row.get("site")) != "linkedin"
+    if page_tag == "Remote" or loc_remote or "remote" in title.lower() or rem:
+        return "Remote"
+    says_remote = any(w in d for w in REMOTE_WORDS)
+    if remote_hit and says_remote:
+        return "Remote"
+    if says_remote or remote_hit:
+        return "Not confirmed"
+    return "Not stated"
+
+
+PAGE_TAG_CACHE = {}
+PAGE_STATS = {"tries": 0, "found": 0, "status": {}}
+PAGE_GIVE_UP_AFTER = 15          # if the first 15 pages show no tag, LinkedIn is hiding it: stop trying today
+
+
+def page_workplace(job_id):
+    """Reads the workplace type LinkedIn shows on the job's own public page: 'Remote', 'Hybrid', 'On-site' or ''."""
+    if not job_id:
+        return ""
+    if job_id in PAGE_TAG_CACHE:
+        return PAGE_TAG_CACHE[job_id]
+    if PAGE_STATS["tries"] >= PAGE_GIVE_UP_AFTER and PAGE_STATS["found"] == 0:
+        return ""
+    PAGE_STATS["tries"] += 1
+    tag = ""
+    # 1) the job's own card (only this job, no "similar jobs" list that could mislead)
     try:
-        start = dt.date.fromisoformat(EMAIL_START_DATE)
-    except ValueError:
-        return 0
-    days = (today.date() - start).days
-    if days < 0:
-        return 0
-    return 10 if days < 7 else (20 if days < 14 else 30)
-
-
-def greeting(email, kind, company, first=""):
-    first = fix_case(first)
-    if first:
-        return f"Hi {first},"
-    local = email.split("@")[0]
-    if kind == "personal" and re.fullmatch(r"[a-z]{3,15}\.[a-z]{2,20}", local):
-        name = local.split(".")[0]                       # only clear first.last addresses, e.g. sarah.lee@
-        if name not in DEPARTMENT_WORDS:
-            return f"Hi {name.capitalize()},"
-    return f"Hi {company} team," if len(company) <= 28 else "Hi there,"
-
-
-def build_email(lead, email, kind, first=""):
-    """One universal sequence for every role: email 1 + 3 follow-ups (sent as replies in the same thread)."""
-    company = clean_company(lead["company"])
-    role = msg_role(lead)
-    skills = skill_text(lead)
-    hi = greeting(email, kind, company, first)
-
-    # Subject line test only (bodies are identical). A2 / B2 so older A / B results never mix in.
-    variant = "A2" if sum(map(ord, company)) % 2 == 0 else "B2"
-    if variant == "A2":
-        subject = f"{role} opening at {company}" if len(role) <= 40 and len(company) <= 40 \
-            else f"Your open role at {company}"
-    else:
-        subject = f"Quick question about your {role} hire" if len(role) <= 40 else \
-            f"Quick question about your hire at {company}"
-
-    fit = (f"We may have candidates with experience in {skills} who could be a good fit for what you're "
-           f"looking for.") if skills else "We may have candidates who could be a good fit for what you're looking for."
-    body1 = (f"{hi}\n\nI noticed {company} is hiring for {article(role)} and thought I'd reach out.\n\n"
-             f"I run Vogent Labs, where we help businesses hire dedicated remote professionals. {fit}\n\n"
-             f"We handle the staffing and payroll on our end, so you can focus on getting the right person "
-             f"into your team.\n\nWould you be open to reviewing a couple of profiles?\n\n"
-             f"Best,\n{SIGNATURE}")
-    pros = (f"a couple of remote professionals with experience in {skills}" if skills
-            else "a couple of remote professionals who could be a fit")
-    fu1 = (f"{hi}\n\nWanted to follow up on my note about the {role} position.\n\n"
-           f"If you're still reviewing candidates, happy to share {pros}, at a much lower cost than a local "
-           f"hire.\n\nWould that be useful?\n\nBest,\n{SIGNATURE}")
-    fu2 = (f"{hi}\n\nNot sure if you've filled the {role} position yet.\n\n"
-           f"At Vogent Labs, we help companies bring on dedicated remote talent while managing the staffing and "
-           f"payroll on our side.\n\nIf you're still exploring options, I'd be happy to share some relevant "
-           f"profiles. Or if a quick call is easier, you can pick a time here: {CALENDLY_URL}\n\n"
-           f"Best,\n{SIGNATURE}")
-    fu3 = (f"{hi}\n\nI'll leave it here for now.\n\nIf the {role} position is still open, happy to share a "
-           f"couple of candidates. And if you've already hired, perhaps we can connect for future openings.\n\n"
-           f"All the best with the search!\n\n{SIGNATURE}")
-    subject = subject[:1].upper() + subject[1:]
-    return subject, body1, [fu1, fu2, fu3], variant
-
-
-# ---------- Main ----------
-def main():
-    today = dt.datetime.now(PKT)
-    if WEEKDAYS_ONLY and today.weekday() >= 5:
-        print("Weekend: no outreach queue today.")
-        return
-
-
-    all_leads = load_candidates()
-    per_co = {}
-    for l in all_leads:
-        per_co.setdefault(norm(l.get("company")), set()).add(l.get("title"))
-    GROWING.update(k for k, v in per_co.items() if len(v) >= 2)
-    leads = [l for l in all_leads if eligible(l)]
-    try:
-        BLOCKED_DOMAINS.update(json.loads(post({"action": "blocked_domains"})).get("domains", []))
+        r = requests.get(f"https://www.linkedin.com/jobs-guest/jobs/api/jobPosting/{job_id}", headers=UA, timeout=20)
+        PAGE_STATS["status"][r.status_code] = PAGE_STATS["status"].get(r.status_code, 0) + 1
+        if r.status_code == 200:
+            h = r.text
+            m = re.search(r'(?i)(?:workplace_?types?|formattedWorkplaceType|workplaceType)\W{1,40}?'
+                          r'(remote|hybrid|on-?site)', h)
+            if m:
+                tag = m.group(1)
+            else:                                          # location line on the card: "London, England (On-site)"
+                for line in re.findall(r'(?i)topcard__flavor[^>]*>\s*([^<]{0,200})', h):
+                    m = re.search(r'(?i)\((remote|hybrid|on-?site)\)', line)
+                    if m:
+                        tag = m.group(1)
+                        break
     except Exception:
         pass
-    best_per_company = {}
-    for l in sorted(leads, key=rank_key):
-        best_per_company.setdefault(co_key(l["company"]), l)     # one row per company, best job
-    ranked = sorted(best_per_company.values(), key=rank_key)
-    print(f"Eligible direct-hire companies today: {len(ranked)}")
-    if not ranked:
-        post({"action": "outreach_add", "rows": [], "eligible": 0})
+    time.sleep(1.2)
+    # 2) the full public page: Google-style job data marks remote jobs as TELECOMMUTE
+    if not tag:
+        try:
+            r = requests.get(f"https://www.linkedin.com/jobs/view/{job_id}/", headers=UA, timeout=20)
+            if r.status_code == 200:
+                for block in re.findall(r'<script type="application/ld\+json">(.*?)</script>', r.text, re.S):
+                    if '"JobPosting"' in block and re.search(r'"jobLocationType"\s*:\s*"TELECOMMUTE"', block):
+                        tag = "remote"
+                        break
+        except Exception:
+            pass
+        time.sleep(1.2)
+    tag = {"remote": "Remote", "hybrid": "Hybrid"}.get(tag.lower(), "On-site" if tag else "")
+    if tag:
+        PAGE_STATS["found"] += 1
+    PAGE_TAG_CACHE[job_id] = tag
+    return tag
+
+
+def work_type(row, title, desc):
+    head = (text(row.get("location")) + " " + title).lower()
+    d = desc.lower()
+    if str(row.get("is_remote")).lower() == "true" or any(w in head for w in REMOTE_WORDS):
+        return "Remote"
+    if "hybrid" in head or "hybrid" in d:
+        return "Hybrid"
+    if any(p in d for p in ONSITE_PHRASES):
+        return "On-site"
+    if any(w in d for w in REMOTE_WORDS):
+        return "Remote (mentioned)"
+    return "Not stated"
+
+
+def key_skills(title, desc, limit=3):
+    """Finds up to 3 tools / tasks named in the job, in the order the post mentions them.
+    Skips anything already in the job title so the note does not repeat itself."""
+    global SKILL_REGEXES
+    if SKILL_REGEXES is None:
+        SKILL_REGEXES = [(name, [build_regex(w) for w in words]) for name, words in SKILLS]
+    source = desc or title
+    hits = []
+    for name, regs in SKILL_REGEXES:
+        if any(r.search(title) for r in regs):
+            continue
+        pos = min((m.start() for r in regs for m in [r.search(source)] if m), default=None)
+        if pos is not None:
+            hits.append((pos, name))
+    return [n for _, n in sorted(hits)][:limit]
+
+
+def join_words(items):
+    return items[0] if len(items) == 1 else ", ".join(items[:-1]) + " and " + items[-1]
+
+
+NOTE_LIMIT = 300   # LinkedIn Premium allows 300 characters in a connection note
+
+
+def connection_note(company, role, category, skills, work):
+    """Universal connection request for every role (same wording for all categories).
+    Starts with "Hi," so outreach.py can add the person's first name once it is known."""
+    if category == "Virtual Assistant":
+        role = "assistant"           # keep "VA" wording out of outreach copy
+    role = trim_role(role)
+    first_word = role.split(" ")[0] if role else ""
+    if first_word.isupper() and len(first_word) > 1:          # acronyms: "an SEO", "a CRM"
+        a_role = ("an " if first_word[0] in "AEFHILMNORSX" else "a ") + role
+    else:
+        a_role = ("an " if role[:1].lower() in "aeiou" else "a ") + role
+    company = clean_company(company)
+    tail = (" Curious, have you found the right person out of the applicants yet, or still going through them?"
+            " Thought it'd be good to connect!")
+    note = f"Hi, noticed {company} is hiring for {a_role}.{tail}"
+    if len(note) + 25 > NOTE_LIMIT:                            # room for a first name added later
+        note = f"Hi, noticed you're hiring for {a_role}.{tail}"   # very long company names
+    return note if len(note) <= NOTE_LIMIT else note[:NOTE_LIMIT - 3].rsplit(" ", 1)[0] + "..."
+
+
+def priority(title, desc, company, industry):
+    """Returns (label, rank). Rank 0 = GHL, 1 = other priority, 2 = none."""
+    tags = []
+    if any(r.search(title + " " + desc) for r in GHL_REGEXES):
+        tags.append("GHL")
+    ind, c = industry.lower(), company.lower()
+    if any(w in ind or w in c for w in REAL_ESTATE_WORDS):
+        tags.append("Real Estate")
+    elif any(w in ind or w in c for w in MARKETING_WORDS):
+        tags.append("Marketing")
+    if not tags:
+        return "", 2
+    return "⭐ " + " · ".join(tags), (0 if "GHL" in tags else 1)
+
+
+def parse_size(raw):
+    nums = [int(n.replace(",", "")) for n in re.findall(r"[\d,]+", raw) if n.replace(",", "")]
+    if not nums:
+        return "Unknown", None
+    label = re.sub(r"\s*employees?", "", raw.strip(), flags=re.I)
+    return label, nums[0]
+
+
+PEOPLE_CACHE = {}
+STAFF_COUNT = {}
+COMPANY_HQ = {}                  # company page "Headquarters" text                 # people on LinkedIn for the company (splits 11-50 into 11-20 and 21-50)
+
+
+def company_people(html):
+    """People shown on the public company page: [(name, profile url, title)].
+    Each person card on LinkedIn's public page is a list item with a profile link, a name and a title."""
+    people = []
+    for card in re.split(r"<li\b", html):
+        url = re.search(r'href="(https://[a-z]{2,3}\.linkedin\.com/in/[^"?]+)', card)
+        name = re.search(r'base-main-card__title[^>]*>\s*([^<]+?)\s*<', card) or \
+            re.search(r'<h3[^>]*>\s*([^<]{3,60}?)\s*</h3>', card)
+        title = re.search(r'base-main-card__subtitle[^>]*>\s*([^<]+?)\s*<', card) or \
+            re.search(r'<h4[^>]*>\s*([^<]{2,120}?)\s*</h4>', card)
+        if url and name:
+            people.append((re.sub(r"\s+", " ", name.group(1)).strip(), url.group(1),
+                           re.sub(r"\s+", " ", title.group(1)).strip() if title else ""))
+    return people[:15]
+
+
+def company_size(company_url, row):
+    """Returns (size label, smallest headcount or None, industry, website) from the company page."""
+    url = company_url.split("?")[0].rstrip("/")
+    if "linkedin.com/company/" not in url:
+        js = text(row.get("company_num_employees"))
+        label, mn = parse_size(js) if js else ("Unknown", None)
+        return label, mn, "", ""
+    if url in SIZE_CACHE:
+        return SIZE_CACHE[url]
+    result = ("Unknown", None, "", "")
+    try:
+        r = requests.get(url + "/", headers=UA, timeout=20, allow_redirects=True)
+        if r.status_code == 200 and "authwall" not in r.url:
+            plain = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", r.text))
+            m = re.search(r"Company size\s*([\d,]+\s*(?:-\s*[\d,]+)?\+?)\s*employees", plain, re.I)
+            ind = re.search(r"Industry\s+(.{3,60}?)\s+(?:Company size|Headquarters|Type|Founded)", plain)
+            label, mn = parse_size(m.group(1)) if m else ("Unknown", None)
+            result = (label, mn, ind.group(1).strip() if ind else "", company_website(r.text))
+            PEOPLE_CACHE[url] = company_people(r.text)
+            hq = re.search(r"Headquarters\s+(.{3,80}?)\s+(?:Type|Founded|Specialties|Company size|Locations)", plain)
+            COMPANY_HQ[url] = hq.group(1).strip() if hq else ""
+            cnt = re.search(r"(?:See all|View all)\s+([\d,]+)\s+employees", plain, re.I) or \
+                re.search(r"([\d,]+)\s+employees on LinkedIn", plain, re.I)
+            if cnt:
+                STAFF_COUNT[url] = int(cnt.group(1).replace(",", ""))
+    except Exception:
+        pass
+    SIZE_CACHE[url] = result
+    time.sleep(2)
+    return result
+
+
+US_BENEFIT_WORDS = ["401(k)", "401k", "dental", "vision insurance", "health insurance",
+                    "medical insurance", "medical, dental", "paid time off", "pto", "hsa", "fsa"]
+WT_LABELS = {"1": "On-site", "3": "Hybrid", "2": "Remote"}    # LinkedIn's workplace badge filters
+
+
+def us_benefits(desc):
+    d = desc.lower()
+    return sum(1 for w in US_BENEFIT_WORDS if w in d) >= 2       # two or more = full US benefits package
+
+
+def badge_map(term, location, pages=3):
+    """Reads LinkedIn's own On-site / Hybrid / Remote badges from the public search pages.
+    Returns {job_id: badge}. On-site and Hybrid always win over Remote."""
+    badges = {}
+    for wt in ("2", "3", "1"):
+        for page in range(pages):
+            try:
+                r = requests.get(
+                    "https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search",
+                    params={"keywords": term, "location": location, "f_TPR": f"r{HOURS_OLD * 3600}",
+                            "f_WT": wt, "start": page * 10},
+                    headers=UA, timeout=20)
+                if r.status_code != 200:
+                    break
+                ids = re.findall(r"jobPosting:(\d+)", r.text)
+                if not ids:
+                    break
+                for job_id in ids:
+                    badges.setdefault(job_id, set()).add(WT_LABELS[wt])
+            except Exception:
+                break
+            finally:
+                time.sleep(1.5)
+    return badges
+
+
+def job_id_of(row):
+    m = re.search(r"/jobs/view/(\d+)", text(row.get("job_url")))
+    if m:
+        return m.group(1)
+    if text(row.get("site")) == "linkedin":
+        m = re.search(r"(\d{6,})", text(row.get("id")))
+        return m.group(1) if m else ""
+    return text(row.get("site")) + ":" + (text(row.get("id")) or text(row.get("job_url")))
+
+
+def company_website(html):
+    """Finds the company's own website link on its public LinkedIn page."""
+    from urllib.parse import parse_qs, unquote, urlparse
+    for tag in re.findall(r"<a[^>]+>", html):
+        if "about_website" not in tag and "website" not in tag.lower():
+            continue
+        href = re.search(r'href="([^"]+)"', tag)
+        if not href:
+            continue
+        link = href.group(1).replace("&amp;", "&")
+        if "linkedin.com/redir" in link:
+            link = unquote(parse_qs(urlparse(link).query).get("url", [""])[0])
+        if link.startswith("http") and "linkedin.com" not in link:
+            return link
+    return ""
+
+
+def search(term, n, location, remote=False, cat_name=""):
+    """GHL / CRM: LinkedIn, Indeed, ZipRecruiter, Google Jobs, beBee and SimplyHired. Every other role: LinkedIn only.
+    Each site on its own, so one failing site never stops the others."""
+    frames = []
+    sites = SITES if cat_name == "CRM Automation" else ["linkedin"]
+    for site in sites:
+        try:
+            kw = dict(site_name=[site], search_term=term, location=location, results_wanted=n,
+                      hours_old=HOURS_OLD, is_remote=remote)
+            if site == "linkedin":
+                kw["linkedin_fetch_description"] = True
+            if site == "indeed":
+                kw["country_indeed"] = "USA"
+            if site == "google":
+                kw["google_search_term"] = f"{term} {'remote ' if remote else ''}jobs in United States since yesterday"
+            df = scrape_jobs(**kw)
+            if df is not None and len(df):
+                df = df.copy()
+                df["site"] = site
+                frames.append(df)
+            print(f"  {site} | {term}{' | remote filter' if remote else ''}: {0 if df is None else len(df)} jobs")
+        except Exception as e:
+            print(f"  {site} | {term}: failed ({e})")
+        finally:
+            time.sleep(3)
+    if cat_name == "CRM Automation" and not remote:
+        extra = ghl_extra_sites(term)
+        if extra is not None:
+            frames.append(extra)
+    if not frames:
+        return None
+    import pandas as pd
+    return pd.concat(frames, ignore_index=True)
+
+
+def ghl_extra_sites(term):
+    """beBee and SimplyHired have no free feed: read their public search pages (job data embedded in the page).
+    Best effort: if a site blocks us, the run continues and the log shows 0."""
+    import pandas as pd
+    from urllib.parse import quote
+    rows = []
+    pages = [("bebee", f"https://us.bebee.com/jobs?term={quote(term)}&location=United%20States"),
+             ("simplyhired", f"https://www.simplyhired.com/search?q={quote(term)}&l=remote")]
+    for site, url in pages:
+        n = 0
+        try:
+            r = requests.get(url, headers=UA, timeout=30)
+            html = r.text if r.status_code == 200 else ""
+            jobs = []
+            for block in re.findall(r'<script[^>]*application/ld\+json[^>]*>(.*?)</script>', html, re.S):
+                try:
+                    data = json.loads(block)
+                except Exception:
+                    continue
+                items = data if isinstance(data, list) else data.get("itemListElement", [data])
+                for it in items:
+                    it = it.get("item", it) if isinstance(it, dict) else {}
+                    if it.get("@type") == "JobPosting":
+                        jobs.append(it)
+            m = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', html, re.S)
+            if m:
+                try:
+                    props = json.loads(m.group(1)).get("props", {}).get("pageProps", {})
+                    for j in props.get("jobs", []) or []:
+                        jobs.append({"title": j.get("title"), "hiringOrganization": {"name": j.get("company")},
+                                     "description": j.get("snippet", ""), "url": "https://www.simplyhired.com/job/" +
+                                     str(j.get("jobKey", "")), "jobLocation": j.get("location", ""),
+                                     "datePosted": j.get("dateOnIndeed", "")})
+                except Exception:
+                    pass
+            for j in jobs:
+                org = j.get("hiringOrganization") or {}
+                title, company = str(j.get("title") or ""), str(org.get("name") if isinstance(org, dict) else org or "")
+                if not title or not company:
+                    continue
+                loc = json.dumps(j.get("jobLocation", "")) + " " + str(j.get("jobLocationType", ""))
+                rows.append({"site": site, "id": f"{site}:{j.get('url') or title + company}",
+                             "job_url": str(j.get("url") or url), "title": title, "company": company,
+                             "description": re.sub(r"<[^>]+>", " ", str(j.get("description") or "")),
+                             "location": "Remote" if re.search(r"remote|telecommute", loc, re.I) else loc[:80],
+                             "date_posted": str(j.get("datePosted") or "")[:10], "company_url": "",
+                             "is_remote": bool(re.search(r"remote|telecommute", loc, re.I)), "company_url_direct": ""})
+                n += 1
+        except Exception as e:
+            print(f"  {site} | {term}: failed ({e})")
+        print(f"  {site} | {term}: {n} jobs")
+        time.sleep(3)
+    return pd.DataFrame(rows) if rows else None
+
+
+REMOTE_FILTER_IDS = set()
+BOARD_SITES = {"remotive", "remoteok", "wwr", "himalayas", "jobicy"}
+CRM_BOARD_RE = re.compile(r"go\s?high\s?level|\bhighlevel\b|\bghl\b|hubspot|\bcrm (?:specialist|admin|"
+                          r"administrator|automation|manager|consultant|developer)|lead\s?connector", re.I)
+US_STATES = ("alabama|alaska|arizona|arkansas|california|colorado|connecticut|delaware|florida|georgia|hawaii|idaho|"
+             "illinois|indiana|iowa|kansas|kentucky|louisiana|maine|maryland|massachusetts|michigan|minnesota|"
+             "mississippi|missouri|montana|nebraska|nevada|new hampshire|new jersey|new mexico|new york|"
+             "north carolina|north dakota|ohio|oklahoma|oregon|pennsylvania|rhode island|south carolina|"
+             "south dakota|tennessee|texas|utah|vermont|virginia|washington|west virginia|wisconsin|wyoming|"
+             "district of columbia|united states|usa")
+US_HQ_RE = re.compile(r"\b(?:" + US_STATES + r")\b|,\s*(?:AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|"
+                      r"MD|MA|MI|MN|MS|MO|MT|NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VT|VA|WA|WV|WI|WY|DC)\b",
+                      re.I)
+# Board location tags we can pitch: open to anyone (or to Asia / Pakistan)
+OPEN_LOCATION_RE = re.compile(r"worldwide|anywhere|global|international|\bremote\b$|^remote$|asia|apac|pakistan|"
+                              r"emea|any location|no restriction", re.I)
+
+
+def us_company(company_url):
+    """Remote boards list companies from everywhere: keep US ones (from the LinkedIn company page)."""
+    hq = COMPANY_HQ.get(company_url.split("?")[0].rstrip("/"), "")
+    return bool(hq and US_HQ_RE.search(hq))
+
+
+def linkedin_company_guess(name):
+    """Remote boards don't link LinkedIn: try the company page by name (the page check confirms the match)."""
+    base = re.sub(r"[,.]?\s+(?:inc|llc|ltd|co|corp|corporation|company)\.?$", "", str(name or "").strip(), flags=re.I)
+    slug_ = re.sub(r"[^a-z0-9]+", "-", base.lower()).strip("-")
+    return f"https://www.linkedin.com/company/{slug_}" if slug_ else ""
+
+
+def linkedin_company_guesses(name):
+    """Possible LinkedIn page names: 'Tiny Co' -> tiny-co, tiny, tinyco."""
+    full = re.sub(r"[^a-z0-9]+", "-", str(name or "").lower()).strip("-")
+    first = linkedin_company_guess(name).rsplit("/", 1)[-1]
+    out = []
+    for sl in (full, first, full.replace("-", "")):
+        u = f"https://www.linkedin.com/company/{sl}"
+        if sl and u not in out:
+            out.append(u)
+    return out[:3]
+
+
+def board_row(site, jid, title, company, desc, url, loc, posted):
+    plain = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", str(desc or "")))
+    return {"site": site, "id": f"{site}:{jid}", "job_url": url, "title": str(title or "").strip(),
+            "company": str(company or "").strip(), "description": plain, "location": "Remote",
+            "board_location": str(loc or ""), "date_posted": posted, "company_url": linkedin_company_guess(company),
+            "is_remote": True, "company_url_direct": ""}
+
+
+def remote_boards():
+    """Jobs from Remotive, Remote OK, We Work Remotely, Himalayas and Jobicy posted in the look-back window.
+    Only jobs open to people outside the US (Worldwide / Anywhere / Asia); 'USA only' and other regions are skipped."""
+    import pandas as pd
+    cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=HOURS_OLD)
+    rows, stats = [], {}
+
+    def keep(r, when):
+        try:
+            ok_time = when is None or when >= cutoff
+        except TypeError:
+            ok_time = True
+        loc = r["board_location"].strip()
+        open_loc = (not loc) or bool(OPEN_LOCATION_RE.search(loc)) and not re.search(
+            r"\b(?:us|usa|u\.s\.|united states|north america|americas|canada|europe|uk|latam)\b(?! ?\+)", loc, re.I) \
+            or bool(re.search(r"worldwide|anywhere", loc, re.I))
+        crm_job = bool(CRM_BOARD_RE.search(r["title"] + " " + r["description"]))
+        if ok_time and open_loc and crm_job and r["title"] and r["company"]:
+            if re.search(r"worldwide|anywhere|global|international|no restriction", loc, re.I):
+                r["description"] += " work from anywhere"            # counts as an 'open worldwide' signal
+            rows.append(r)
+            stats[r["site"]] = stats.get(r["site"], 0) + 1
+
+    def get(url):
+        try:
+            r = requests.get(url, headers=UA, timeout=40)
+            return r if r.status_code == 200 else None
+        except Exception:
+            return None
+
+    def ts(v):
+        try:
+            if isinstance(v, (int, float)):
+                return dt.datetime.fromtimestamp(v if v < 1e12 else v / 1000, dt.timezone.utc)
+            v = str(v).replace("Z", "+00:00")
+            d = dt.datetime.fromisoformat(v[:25]) if "T" in v else dt.datetime.fromisoformat(v[:10])
+            return d if d.tzinfo else d.replace(tzinfo=dt.timezone.utc)
+        except Exception:
+            return None
+
+    r = get("https://remotive.com/api/remote-jobs?limit=300")
+    for j in (r.json().get("jobs", []) if r else []):
+        keep(board_row("remotive", j.get("id"), j.get("title"), j.get("company_name"), j.get("description"),
+                       j.get("url"), j.get("candidate_required_location"), str(j.get("publication_date"))[:10]),
+             ts(j.get("publication_date")))
+    r = get("https://remoteok.com/api")
+    for j in ((r.json()[1:] if r and isinstance(r.json(), list) else [])):
+        keep(board_row("remoteok", j.get("id"), j.get("position"), j.get("company"), j.get("description"),
+                       j.get("url"), j.get("location") or "Worldwide", str(j.get("date"))[:10]), ts(j.get("date")))
+    r = get("https://weworkremotely.com/remote-jobs.rss")
+    if r:
+        for item in re.findall(r"<item>(.*?)</item>", r.text, re.S):
+            tag = lambda t: (re.search(rf"<{t}>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?</{t}>", item, re.S) or [None, ""])[1]
+            head = tag("title")
+            company, _, title = head.partition(":")
+            when = None
+            try:
+                from email.utils import parsedate_to_datetime
+                when = parsedate_to_datetime(tag("pubDate"))
+            except Exception:
+                pass
+            keep(board_row("wwr", tag("guid") or tag("link"), title, company, tag("description"), tag("link"),
+                           tag("region"), when.strftime("%Y-%m-%d") if when else ""), when)
+    for offset in (0, 100):
+        r = get(f"https://himalayas.app/jobs/api?limit=100&offset={offset}")
+        for j in (r.json().get("jobs", []) if r else []):
+            locs = j.get("locationRestrictions") or []
+            loc = ", ".join(x if isinstance(x, str) else str(x.get("name", "")) for x in locs) or "Worldwide"
+            when = ts(j.get("pubDate"))
+            keep(board_row("himalayas", j.get("guid") or j.get("applicationLink"), j.get("title"), j.get("companyName"),
+                           j.get("description") or j.get("excerpt"), j.get("applicationLink") or j.get("guid"), loc,
+                           when.strftime("%Y-%m-%d") if when else ""), when)
+    r = get("https://jobicy.com/api/v2/remote-jobs?count=100")
+    for j in (r.json().get("jobs", []) if r else []):
+        keep(board_row("jobicy", j.get("id"), j.get("jobTitle"), j.get("companyName"), j.get("jobDescription"),
+                       j.get("url"), j.get("jobGeo"), str(j.get("pubDate"))[:10]), ts(j.get("pubDate")))
+    print("Remote boards, jobs open worldwide in the window:", stats)
+    return pd.DataFrame(rows) if rows else None
+        # jobs LinkedIn returned for its Remote filter (one signal, not proof on its own)
+
+
+def main():
+    found = {}
+    checked, ex_agency, ex_big, ex_lang, ex_incomplete, ex_loc = set(), set(), set(), set(), set(), set()
+    ex_senior, ex_role = set(), set()                       # skip reasons, shown in the Run Log
+    wt_checked, wt_confirmed = set(), set()                 # work type read from LinkedIn's job page
+    companies_today = set()
+    ran = []
+
+    for region_name, rcfg in REGIONS.items():
+        if not rcfg["enabled"] or (ONLY_REGION and region_name != ONLY_REGION):
+            continue
+        for cat_name, cfg in CATEGORIES.items():
+            if not cfg["enabled"] or (ONLY_CATEGORY and cat_name != ONLY_CATEGORY):
+                continue
+            if cfg.get("regions") and region_name not in cfg["regions"]:
+                continue
+            ran.append(f"{cat_name} | {region_name}")
+            print(f"\n== {cat_name} | {region_name} ==")
+            regexes = [build_regex(k) for k in cfg["must_mention"]]
+            deep_n = max(10, int(cfg["deep_results"] * rcfg["scale"]))
+            normal_n = max(10, int(cfg["normal_results"] * rcfg["scale"]))
+            terms = [(t, deep_n) for t in cfg["deep_searches"] if not is_senior(t)] + \
+                    [(t, normal_n) for t in cfg["searches"]
+                     if not is_senior(t) or crm_manager_title(t, cat_name)]   # "Manager" only for CRM
+
+            if cat_name == "Remote Boards":
+                terms = [("remote job boards", 0)]
+            for location, short in rcfg["locations"]:
+                passes = (True,) if cat_name == "Remote Boards" else (True, False)
+                for term, n, remote_pass in [(t, k, rp) for t, k in terms for rp in passes]:
+                    df = remote_boards() if cat_name == "Remote Boards" else \
+                        search(term, n, location, remote_pass, cat_name)
+                    if remote_pass and df is not None and len(df):
+                        REMOTE_FILTER_IDS.update(job_id_of(r) for _, r in df.iterrows())
+                    if df is None or not len(df):
+                        continue
+                    for _, row in df.iterrows():
+                        url = text(row.get("job_url"))
+                        title = text(row.get("title")).strip()
+                        company = text(row.get("company")).strip()
+                        posted = text(row.get("date_posted")).strip()
+                        # Half-loaded LinkedIn cards are skipped, never added
+                        if not (url and title and company and posted):
+                            ex_incomplete.add(url or str(len(ex_incomplete)))
+                            continue
+                        # Same job seen twice counts once (company + title)
+                        key = re.sub(r"\W+", "", company.lower()) + "|" + re.sub(r"\W+", "", title.lower())
+                        if key in found or key in ex_agency or key in ex_big or key in ex_lang or key in ex_loc:
+                            continue
+                        checked.add(key)
+                        desc = text(row.get("description"))
+                        industry = text(row.get("company_industry"))
+
+                        crm_mgr = is_senior(title) and crm_manager_title(title, cat_name)
+                        if is_senior(title) and not crm_mgr:
+                            ex_senior.add(key)
+                            continue
+                        if wrong_title(title, cat_name, desc):
+                            ex_role.add(key)                             # in-store, off-target, intern, gig
+                            continue
+                        if regexes and not any(r.search(title + " " + desc) for r in regexes):
+                            continue
+                        co_key = re.sub(r"\W+", "", company.lower())
+                        if co_key in companies_today:
+                            continue                                     # one row per company per day
+                        if title_not_english(title) or not is_english(desc) or needs_other_language(desc):
+                            ex_lang.add(key)
+                            continue
+                        if location_locked(title, text(row.get("location")), desc) or HARD_LOCAL_RE.search(desc):
+                            ex_loc.add(key)                              # must live in the US, W-2, licensed...
+                            continue
+                        if is_agency(company, industry, desc, title):
+                            ex_agency.add(key)
+                            continue
+                        company_url = text(row.get("company_url")).split("?")[0]
+                        if text(row.get("site")) in BOARD_SITES:
+                            for cand in linkedin_company_guesses(company):   # find the company's LinkedIn page
+                                company_size(cand, row)
+                                if COMPANY_HQ.get(cand):
+                                    company_url = cand
+                                    break
+                        size_label, size_min, page_industry, website = company_size(company_url, row)
+                        if size_min is not None and size_min > MAX_EMPLOYEES:
+                            ex_big.add(key)
+                            continue
+                        if text(row.get("site")) in BOARD_SITES and not us_company(company_url):
+                            ex_loc.add(key)                              # remote boards: US companies only
+                            continue
+                        if crm_mgr and (size_min is None or size_min > 50):
+                            ex_senior.add(key)                           # CRM managers only at small companies
+                            continue
+
+                        p_label, p_rank = priority(title, desc, company, industry)
+                        skills = key_skills(title, desc)
+                        role = short_role(title)
+                        # Work type: LinkedIn's own tags first, clear wording second
+                        page_tag = page_workplace(job_id_of(row)) if text(row.get("site")) == "linkedin" else ""
+                        wt_checked.add(key)
+                        if page_tag:
+                            wt_confirmed.add(key)
+                        wtype = decide_work(row, title, desc, page_tag,
+                                            remote_pass or job_id_of(row) in REMOTE_FILTER_IDS)
+                        companies_today.add(co_key)
+                        found[key] = {
+                            "id": key,
+                            "posted": posted,
+                            "priority": p_label,
+                            "priority_rank": p_rank,
+                            "category": best_category(title, cat_name),
+                            "region": short,
+                            "region_rank": rcfg["rank"],
+                            "title": title,
+                            "role": role,
+                            "skills": " · ".join(skills),
+                            "note": connection_note(company, role, cat_name, skills, wtype),
+                            "company": company,
+                            "size": size_label,
+                            "work_type": wtype,
+                            "evidence": evidence(desc, regexes),
+                            "url": url,
+                            "company_url": company_url,
+                            # extra details for Phase 2 outreach (not shown in the Leads tab)
+                            "size_min": size_min,
+                            "industry": page_industry or industry,
+                            "direct": not strict_agency(company, page_industry or industry, desc),
+                            "us_benefits": us_benefits(desc),
+                            "website": website or text(row.get("company_url_direct")),
+                            "worldwide": bool(WORLDWIDE_RE.search(desc)),
+                            "tiny_clue": bool(TINY_CLUE_RE.search(desc)),
+                            "staff_count": STAFF_COUNT.get(company_url.rstrip("/")),
+                            "site": text(row.get("site")) or "linkedin",
+                            "source": SOURCE_LABELS.get(text(row.get("site")) or "linkedin", "LinkedIn"),
+                            "people": PEOPLE_CACHE.get(company_url.rstrip("/"), []),
+                        }
+
+    if not ran:
+        print("This category or region is switched off. Nothing to do.")
         return
 
-    # Skip companies already queued on an earlier day
-    # (checks the new company key and the older one, so nobody contacted before slips through)
-    check = sorted({k for l in ranked[:250] for k in (co_key(l["company"]), norm(l["company"]))})
-    reply = post({"action": "outreach_check", "companies": check})
-    try:
-        new_keys = set(json.loads(reply).get("new", []))
-    except Exception:
-        print("Could not check earlier outreach, continuing:", reply[:200])
-        new_keys = set(check)
-    fresh_ranked = [l for l in ranked if co_key(l["company"]) in new_keys and norm(l["company"]) in new_keys]
-    # ----- Upwork first: it gets the Apify budget before LinkedIn founders -----
-    up = upwork_leads(today, 0)
-    upwork_spent = 0.01 + 0.003 * UPWORK_STATS["checked"] if UPWORK_ENABLED and APIFY_TOKEN else 0
+    leads = sorted(found.values(), key=lambda l: (
+        l["priority_rank"], l["region_rank"], WORK_ORDER.get(l["work_type"], 9), l["posted"]))
+    print(f"\nChecked {len(checked)} | agencies {len(ex_agency)} | big {len(ex_big)} | "
+          f"non-English {len(ex_lang)} | location-locked {len(ex_loc)} | incomplete {len(ex_incomplete)} | "
+          f"senior {len(ex_senior)} | wrong role {len(ex_role)} | "
+          f"work type read from LinkedIn {len(wt_confirmed)}/{len(wt_checked)} "
+          f"(page answers {PAGE_STATS['status']}) | "
+          f"matches {len(leads)}")
 
-    # ----- Best leads first, up to 50 a day -----
-    # Each company, best first: confirmed size + good email found -> Email (until the sender's daily limit),
-    # otherwise -> LinkedIn. The channel never decides who gets in: the ranking does.
-    cap = email_cap(today) if EMAIL_ENABLED else 0
-    rows, linkedin_n, emailed, found_n, looked = [], 0, 0, 0, 0
-    unknown_n = 0
-    for l in fresh_ranked:
-        if len(rows) >= DAILY_TOTAL:
-            break
-        if l.get("size_min") is None:
-            if unknown_n >= UNKNOWN_SIZE_MAX:
-                continue
-            unknown_n += 1
-        email, kind = "", ""
-        if emailed < cap and l.get("size_min") is not None and looked < EMAIL_LOOKUP_MAX:
-            looked += 1
-            email, kind = find_email(l.get("website", ""))
-            if email and email.split("@")[-1].lower() in BLOCKED_DOMAINS:
-                email, kind = "", ""
-        p = free_founder(l["company"], l.get("people"))
-        found_n += 1 if p else 0
-        base = {
-            "key": co_key(l["company"]),
-            "date": today.strftime("%Y-%m-%d"),
-            "rank": len(rows) + 1,
-            "region": l["region"],
-            "company": l["company"],
-            "company_url": l.get("company_url", ""),
-            "size": l.get("size", "Unknown"),
-            "job_url": l["url"],
-            "title": l["title"],
-            "work_type": l.get("work_type", ""),
-            "category": l.get("category", ""),
-            "dm_name": p["name"] if p else "Find founder ↗",
-            "dm_url": p["url"] if p else founder_search_url(l["company"], l.get("company_url", "")),
-            "dm_title": p["title"] if p else "",
-        }
-        if email:
-            first = p["first"] if (p and kind != "personal") else ""
-            subject, body1, fups, variant = build_email(l, email, kind, first)
-            emailed += 1
-            rows.append({**base, "channel": "Email", "email": email,
-                         "note": body1,           # email 1
-                         "followup": fups[0],     # follow-up 1
-                         "followups": fups,       # all 3 follow-ups, sent automatically if there is no reply
-                         "messages": [body1] + fups,   # Message 1-4 columns
-                         "variant": variant,      # A/B hook test
-                         "email_status": "Queued", "subject": subject})
-        else:
-            first = p["first"] if p else ""
-            linkedin_n += 1
-            note, li = named_note(l.get("note", ""), first), linkedin_messages(l, first)
-            rows.append({**base, "channel": "LinkedIn", "email": "", "note": note, "followup": li[0],
-                         "messages": [note] + li, "email_status": "", "_lead": l})
+    # Hand today's leads to the Phase 2 outreach step (GitHub passes this file along)
+    os.makedirs("candidates", exist_ok=True)
+    fname = re.sub(r"\W+", "_", (ONLY_CATEGORY or "all") + "_" + (ONLY_REGION or "all")) + ".json"
+    with open(os.path.join("candidates", fname), "w") as fh:
+        json.dump(leads, fh)
 
-    # ----- Apify founder lookup for LinkedIn rows, with whatever budget Upwork left today -----
-    left = APIFY_DAILY_BUDGET_USD - upwork_spent
-    missing = [r for r in rows if r["channel"] == "LinkedIn" and r["dm_name"] == "Find founder ↗"
-               and slug(r.get("company_url"))]
-    if FOUNDER_LOOKUP and missing and left >= 0.06:
-        hits = match_people([r["_lead"] for r in missing],
-                            apify_people(sorted({r["company_url"] for r in missing}), budget=left))
-        for r in missing:
-            p = hits.get(r["company"])
-            if not p:
-                continue
-            note, li = named_note(r["_lead"].get("note", ""), p["first"]), linkedin_messages(r["_lead"], p["first"])
-            r.update({"dm_name": p["name"], "dm_url": p["url"], "dm_title": p["title"],
-                      "note": note, "followup": li[0], "messages": [note] + li})
-        print(f"Apify founders: {len(hits)} found with ${left:.2f} left after Upwork")
-    for r in rows:
-        r.pop("_lead", None)
-    found = {r["company"]: 1 for r in rows if r["dm_name"] != "Find founder ↗"}
-    print(f"LinkedIn rows: {linkedin_n} | emails queued: {emailed} (limit {cap}) | decision makers found: {len(found)}")
-
-    # ----- Upwork GHL leads with a named client (searched at the start) -----
-    up_rows = []
-    if up:
-        reply = post({"action": "outreach_check", "companies": [norm(u["company"]) for u in up],
-                      "recontact_days": UPWORK_RECONTACT_DAYS})
-        try:
-            new_up = set(json.loads(reply).get("new", []))
-        except Exception:
-            new_up = {norm(u["company"]) for u in up}
-        queued_keys = {r["key"] for r in rows}
-        fresh_up = [u for u in up if norm(u["company"]) in new_up and norm(u["company"]) not in queued_keys]
-        UPWORK_STATS["new"] = len(fresh_up)
-        for u in fresh_up:
-            p = free_founder(u["company"])
-            first = p["first"] if p else ""
-            up_msgs = upwork_messages(u, first)
-            up_rows.append({
-                "key": norm(u["company"]),
-                "date": today.strftime("%Y-%m-%d"),
-                "rank": len(rows) + 1,
-                "channel": "Upwork",
-                "region": u["region"],
-                "company": u["company"],
-                "company_url": linkedin_company_url(u["company"]),
-                "size": u["size"],
-                "job_url": u["url"],
-                "title": u["title"],
-                "work_type": "Remote",
-                "dm_name": p["name"] if p else "Find founder ↗",
-                "dm_url": p["url"] if p else founder_search_url(u["company"]),
-                "dm_title": p["title"] if p else "",
-                "email": "",
-                "note": up_msgs[0],                     # LinkedIn connection note (Message 1)
-                "followup": up_msgs[1],                 # DM after accept (Message 2)
-                "messages": up_msgs,                    # note, DM, follow-up 1, follow-up 2 (same as LinkedIn)
-                "email_status": "",
-                "recontact_days": UPWORK_RECONTACT_DAYS,
-            })
-
-    # Upwork GoHighLevel leads always at the top of the tab
-    rows = up_rows + rows
-    for i, r in enumerate(rows):
-        r["rank"] = i + 1
-    print("Sheet response:", post({"action": "outreach_add", "rows": rows,
-                                   "eligible": len(ranked), "found": len(found),
-                                   "emails": emailed,
-                                   "upwork": f'{UPWORK_STATS["checked"]} checked, {UPWORK_STATS["named"]} named, '
-                                             f'{UPWORK_STATS["new"]} new'})[:300])
+    r = requests.post(
+        WEBAPP_URL,
+        json={"token": TOKEN, "category": ", ".join(ran), "leads": leads,
+              "checked": len(checked), "excluded": len(ex_agency),
+              "excluded_big": len(ex_big), "excluded_lang": len(ex_lang),
+              "excluded_incomplete": len(ex_incomplete), "excluded_location": len(ex_loc),
+              "skipped_senior": len(ex_senior), "skipped_role": len(ex_role),
+              "wt_confirmed": len(wt_confirmed), "wt_checked": len(wt_checked),
+              "wt_remote": sum(1 for l in leads if l.get("work_type") == "Remote")},
+        timeout=180,
+    )
+    print("Sheet response:", r.text[:300])
 
 
 if __name__ == "__main__":
