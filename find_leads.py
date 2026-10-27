@@ -206,7 +206,7 @@ CATEGORIES = {
 # ---------- Recruiter / agency filter (add names anytime, lowercase) ----------
 AGENCY_BLOCKLIST = [
     # job boards and gig marketplaces (not employers)
-    "isarta", "goodwork", "mercor", "outlier ai", "alignerr", "dataannotation", "data annotation tech",
+    "isarta", "goodwork", "teema", "mercor", "outlier ai", "alignerr", "dataannotation", "data annotation tech",
     "braintrust", "toptal", "crossover", "remotasks", "micro1",
     "robert half", "insight global", "randstad", "adecco", "teksystems", "kforce",
     "aerotek", "kelly services", "manpower", "express employment", "beacon hill",
@@ -330,7 +330,7 @@ STRONG_REMOTE = ["fully remote", "100% remote", "remote position", "remote role"
 # Strongest offshore signal: the employer is open to people outside the US
 WORLDWIDE_RE = re.compile(r"work from anywhere|anywhere in the world|worldwide|world-wide|international "
                           r"(?:candidates|applicants|contractors|talent)|global(?:ly)? (?:remote|team|talent)|"
-                          r"any time ?zone|all time ?zones|independent contractor|\b1099\b|contract(?:or)? basis|"
+                          r"any time ?zone|all time ?zones|"
                           r"\basync(?:hronous)?\b|offshore|overseas", re.I)
 # Hard local requirements: the job cannot be done from Pakistan
 HARD_LOCAL_RE = re.compile(r"\bw-?2 (?:only|employee|employment|position|role)\b|"
@@ -338,6 +338,20 @@ HARD_LOCAL_RE = re.compile(r"\bw-?2 (?:only|employee|employment|position|role)\b
                            r"(?:u\.?s\.?|us) citizenship (?:is )?required|security clearance|"
                            r"must (?:live|reside|be located|be based) (?:in|within|near)|local (?:candidates|applicants) only|"
                            r"must hold an? (?:active |valid )?(?:insurance|real estate|nursing|cpa|state) licen[sc]e", re.I)
+# Commission-only, MLM, "partner / co-founder" and paid-task posts are not real hires
+NOT_A_HIRE_TITLE_RE = re.compile(r"commission|co-?founder|\bequity\b|\bpartner\b(?! (?:success|marketing|manager|"
+                                 r"relations|account))|paid (?:data )?task|data task|representative needed|\bcloser\b|"
+                                 r"high[- ]ticket|financial (?:professional|advisor|representative)|insurance (?:agent|producer)",
+                                 re.I)
+NOT_A_HIRE_DESC_RE = re.compile(r"commission[- ]only|commission[- ]based|100% commission|straight commission|"
+                                r"equity[- ]only|unpaid|no base (?:pay|salary)|uncapped commission", re.I)
+# IT services firms that resell staff to their clients
+IT_STAFFING_NAME_RE = re.compile(r"\b(?:it solutions|infotech|info tech|technologies|tech solutions|softech|"
+                                 r"consulting|consultancy|staffing)\b", re.I)
+# Small-business clue for companies whose size is unknown
+TINY_CLUE_RE = re.compile(r"small (?:business|team|company|firm|family)|family[- ]owned|owner[- ]operated|"
+                          r"solo(?:preneur)?|boutique|our founder|the founder|work directly with (?:the )?(?:founder|owner|ceo)|"
+                          r"report(?:ing)? (?:directly )?to (?:the )?(?:founder|owner|ceo)", re.I)
 HARD_LOCAL_TITLE_RE = re.compile(r"\b(?:us|u\.s\.|usa|uk|canada)[- ]based\b|\blicensed\b|\bhotel\b|"
                                  r"guest (?:experience|service|services)|front desk|concierge", re.I)
 ONSITE_PHRASES = [
@@ -428,8 +442,10 @@ def evidence(desc, regexes):
     return "(matched in title)"
 
 
-def is_agency(company, industry, desc):
+def is_agency(company, industry, desc, title=""):
     c, ind, d = company.lower(), industry.lower(), desc.lower()
+    if IT_STAFFING_NAME_RE.search(company) and re.search(r"consultant|developer|engineer|architect", title, re.I):
+        return True                              # IT services firm placing someone at its client
     if "staffing" in ind or "recruit" in ind:
         return True
     if any(re.search(r"\b" + re.escape(b) + r"\b", c) for b in AGENCY_BLOCKLIST):
@@ -528,6 +544,22 @@ ANY_FIT_RE = re.compile(r"automation|\bcrm\b|hubspot|highlevel|\bghl\b|zapier|n8
 NOT_STAFFABLE_RE = re.compile(r"\b(analyst|reporter|journalist|technician)\b", re.I)
 
 
+def best_category(title, category):
+    """Category label from the job title (the search that found it can be a different one)."""
+    if category in ("CRM Automation", "AI Automation"):
+        return category
+    if ROLE_FIT_RE.get(category) and ROLE_FIT_RE[category].search(title):
+        return category
+    for cat, rx in ROLE_FIT_RE.items():
+        if rx.search(title):
+            return cat
+    if re.search(r"automation|zapier|n8n|\bai\b|chatbot", title, re.I):
+        return "AI Automation"
+    if re.search(r"\bcrm\b|hubspot|highlevel|\bghl\b", title, re.I):
+        return "CRM Automation"
+    return category
+
+
 def wrong_title(title, category, desc=""):
     """True for roles we should not pitch: in-store, off-target, no budget, gig listings, or not this category's work."""
     if NOT_REMOTE_TITLE_RE.search(title) or OFF_TARGET_TITLE_RE.search(title):
@@ -539,7 +571,7 @@ def wrong_title(title, category, desc=""):
         return not (CRM_TITLE_RE.search(title) or GHL_RE.search(title + " " + desc))
     if NOT_STAFFABLE_RE.search(title) and not re.search(r"customer", title, re.I):
         return True
-    if HARD_LOCAL_TITLE_RE.search(title):
+    if HARD_LOCAL_TITLE_RE.search(title) or NOT_A_HIRE_TITLE_RE.search(title) or NOT_A_HIRE_DESC_RE.search(desc):
         return True
     # Any work that can be done from Pakistan counts, whichever search found it
     return not (any(r.search(title) for r in ROLE_FIT_RE.values()) or ANY_FIT_RE.search(title))
@@ -948,7 +980,7 @@ def main():
                         if location_locked(title, text(row.get("location")), desc) or HARD_LOCAL_RE.search(desc):
                             ex_loc.add(key)                              # must live in the US, W-2, licensed...
                             continue
-                        if is_agency(company, industry, desc):
+                        if is_agency(company, industry, desc, title):
                             ex_agency.add(key)
                             continue
                         company_url = text(row.get("company_url")).split("?")[0]
@@ -976,7 +1008,7 @@ def main():
                             "posted": posted,
                             "priority": p_label,
                             "priority_rank": p_rank,
-                            "category": cat_name,
+                            "category": best_category(title, cat_name),
                             "region": short,
                             "region_rank": rcfg["rank"],
                             "title": title,
@@ -996,6 +1028,7 @@ def main():
                             "us_benefits": us_benefits(desc),
                             "website": website or text(row.get("company_url_direct")),
                             "worldwide": bool(WORLDWIDE_RE.search(desc)),
+                            "tiny_clue": bool(TINY_CLUE_RE.search(desc)),
                             "staff_count": STAFF_COUNT.get(company_url.rstrip("/")),
                             "site": text(row.get("site")) or "linkedin",
                             "people": PEOPLE_CACHE.get(company_url.rstrip("/"), []),
