@@ -442,6 +442,35 @@ def client_name(desc):
     return ""
 
 
+# Domains that never identify the client (tools, social sites, mail providers)
+NOT_CLIENT_DOMAINS = re.compile(r"upwork|gohighlevel|highlevel|leadconnector|msgsndr|hubspot|google|youtube|youtu\.be|"
+                                r"loom|calendly|facebook|fb\.com|instagram|linkedin|twitter|x\.com|tiktok|zapier|"
+                                r"make\.com|gmail|yahoo|outlook|hotmail|icloud|bit\.ly|tinyurl|canva|notion|figma|"
+                                r"dropbox|wix|squarespace|shopify\.com|wordpress\.(?:com|org)|godaddy|clickfunnels|"
+                                r"kajabi|stripe|paypal|slack|zoom|example|apple\.com|microsoft|amazon|github|airtable|"
+                                r"typeform|jotform|vimeo|medium\.com|trustpilot|yelp|apollo\.io|n8n|openai|chatgpt", re.I)
+
+
+def client_from_domain(desc):
+    """Anonymous posts often still show the client's own website or email: 'see acme-roofing.com'.
+    Returns (company name, website) or ('', '')."""
+    for m in re.finditer(r"(?:https?://)?(?:www\.)?([a-z0-9][a-z0-9-]{1,40}\.(?:com|co|io|net|org|us|ai|agency|"
+                         r"marketing|biz|pro|app|health|law|realty|homes))\b(?![.@\w])", desc, re.I):
+        dom = m.group(1).lower()
+        if NOT_CLIENT_DOMAINS.search(dom):
+            continue
+        stem = dom.rsplit(".", 1)[0]
+        name = " ".join(w.capitalize() for w in re.split(r"[-_]", stem) if w)
+        if len(stem) >= 3 and name.lower() not in NOT_A_NAME:
+            return name, "https://" + dom
+    for m in re.finditer(r"\b[\w.+-]+@([a-z0-9-]{2,40}\.(?:com|co|io|net|org|us|ai|agency))\b", desc, re.I):
+        dom = m.group(1).lower()
+        if not NOT_CLIENT_DOMAINS.search(dom):
+            stem = dom.rsplit(".", 1)[0]
+            return " ".join(w.capitalize() for w in re.split(r"[-_]", stem) if w), "https://" + dom
+    return "", ""
+
+
 def proposal_keyword(desc):
     """Many posts say 'Start your proposal with the word X'. We put X first, as asked."""
     m = re.search(r"(?i)(?:start|begin)\s+(?:your|the)\s+(?:proposal|application|cover letter|response)[^.\n]{0,30}?"
@@ -488,6 +517,7 @@ def upwork_leads(today, start_rank):
         print("Upwork lookup failed:", e)
         return []
     leads, seen = [], set()
+    drop = {"no_name": 0, "not_verified": 0, "not_us": 0, "commission": 0, "big": 0, "duplicate": 0}
     for it in items:
         desc = str(get_path(it, "data.opening.description", "") or "")
         country = str(get_path(it, "buyer.location.country", "") or "")
@@ -495,25 +525,37 @@ def upwork_leads(today, start_rank):
         size = get_path(it, "buyer.company.profile.size")
         spent = get_path(it, "buyer.stats.totalCharges.amount", 0) or 0
         verified = get_path(it, "buyer.isPaymentMethodVerified", True)
-        if not verified or float(spent or 0) < 100:
-            continue                                       # only clients who have actually paid freelancers
-        name = client_name(desc)
+        if not verified:
+            drop["not_verified"] += 1
+            continue                     # payment method verified (new clients with $0 spent are fine)
+        name, website = client_name(desc), ""
+        if not name:
+            name, website = client_from_domain(desc)       # website or email domain in the post
         title = str(it.get("title") or "")
         # Senior / Lead / Manager titles are allowed on Upwork (remote by nature)
-        if not (desc and region and name) or commission_heavy(desc):
-            continue                                       # named clients only, no commission-heavy posts
+        if not region:
+            drop["not_us"] += 1
+            continue
+        if not (desc and name):
+            drop["no_name"] += 1
+            continue                                       # we can only reach clients we can name
+        if commission_heavy(desc):
+            drop["commission"] += 1
+            continue
         if isinstance(size, (int, float)) and size > MAX_COMPANY_SIZE:
+            drop["big"] += 1
             continue
         if norm(name) in seen:
+            drop["duplicate"] += 1
             continue
         seen.add(norm(name))
         d = desc.lower()
         skills = [n for n, words in GHL_SKILLS if any(w in d for w in words)][:3]
         leads.append({"company": name, "region": region, "size": str(int(size)) if isinstance(size, (int, float)) else "Unknown",
                       "title": str(it.get("title") or "GoHighLevel role"), "url": upwork_link(it),
-                      "skills": skills, "keyword": proposal_keyword(desc), "desc": desc})
-    print(f"Upwork: {len(items)} GHL jobs checked, {len(leads)} with a named client")
-    UPWORK_STATS.update({"checked": len(items), "named": len(leads)})
+                      "skills": skills, "keyword": proposal_keyword(desc), "desc": desc, "website": website})
+    print(f"Upwork: {len(items)} GHL jobs checked, {len(leads)} with a named client", drop)
+    UPWORK_STATS.update({"checked": len(items), "named": len(leads), **drop})
     return leads
 
 
@@ -1062,7 +1104,7 @@ def main():
                 "channel": "Upwork",
                 "region": u["region"],
                 "company": u["company"],
-                "company_url": linkedin_company_url(u["company"]),
+                "company_url": u.get("website") or linkedin_company_url(u["company"]),
                 "size": u["size"],
                 "job_url": u["url"],
                 "title": u["title"],
@@ -1085,7 +1127,12 @@ def main():
     print("Sheet response:", post({"action": "outreach_add", "rows": rows,
                                    "eligible": len(ranked), "found": len(found),
                                    "emails": emailed,
-                                   "upwork": f'{UPWORK_STATS["checked"]} checked, {UPWORK_STATS["named"]} named, '
+                                   "upwork": f'{UPWORK_STATS["checked"]} checked · {UPWORK_STATS.get("no_name", 0)} no name · '
+                                             f'{UPWORK_STATS.get("not_verified", 0)} unverified · '
+                                             f'{UPWORK_STATS.get("not_us", 0)} not US/Canada · '
+                                             f'{UPWORK_STATS.get("commission", 0)} commission · '
+                                             f'{UPWORK_STATS.get("big", 0)} too big · '
+                                             f'{UPWORK_STATS["named"] - UPWORK_STATS["new"]} already contacted · '
                                              f'{UPWORK_STATS["new"]} new'})[:300])
 
 
