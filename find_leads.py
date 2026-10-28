@@ -340,7 +340,7 @@ STRONG_REMOTE = ["fully remote", "100% remote", "remote position", "remote role"
                  "fully-remote", "remote-only", "completely remote", "remote work from home"]
 # Strongest offshore signal: the employer is open to people outside the US
 WORLDWIDE_RE = re.compile(r"work from anywhere|anywhere in the world|worldwide|world-wide|international "
-                          r"(?:candidates|applicants|contractors|talent)|global(?:ly)? (?:remote|team|talent)|"
+                          r"(?:candidates|applicants|contractors|talent)|"
                           r"any time ?zone|all time ?zones|"
                           r"\basync(?:hronous)?\b|offshore|overseas", re.I)
 # Hard local requirements: the job cannot be done from Pakistan
@@ -1292,18 +1292,28 @@ def main():
     with open(os.path.join("candidates", fname), "w") as fh:
         json.dump(leads, fh)
 
-    r = requests.post(
-        WEBAPP_URL,
-        json={"token": TOKEN, "category": ", ".join(ran), "leads": leads,
+    payload = {"token": TOKEN, "category": ", ".join(ran), "leads": leads,
               "checked": len(checked), "excluded": len(ex_agency),
               "excluded_big": len(ex_big), "excluded_lang": len(ex_lang),
               "excluded_incomplete": len(ex_incomplete), "excluded_location": len(ex_loc),
               "skipped_senior": len(ex_senior), "skipped_role": len(ex_role),
               "wt_confirmed": len(wt_confirmed), "wt_checked": len(wt_checked),
-              "wt_remote": sum(1 for l in leads if l.get("work_type") == "Remote")},
-        timeout=180,
-    )
-    print("Sheet response:", r.text[:300])
+              "wt_remote": sum(1 for l in leads if l.get("work_type") == "Remote")}
+    # The 14 searches finish close together and the Sheet saves them one at a time: retry if it was busy
+    # (safe: the Sheet never adds the same lead twice)
+    r = None
+    for attempt, wait in enumerate([0, 60, 120, 240]):
+        if wait:
+            print(f"Sheet busy, retrying in {wait}s (try {attempt + 1} of 4)")
+            time.sleep(wait)
+        try:
+            r = requests.post(WEBAPP_URL, json=payload, timeout=240)
+            if r.status_code == 200 and str(r.text).startswith("OK"):
+                break
+            print("Sheet answered:", str(r.text)[:200])
+        except Exception as e:
+            print("Sheet not reachable:", e)
+    print("Sheet response:", (r.text[:300] if r is not None else "no answer after 4 tries"))
 
 
 if __name__ == "__main__":
