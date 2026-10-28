@@ -530,6 +530,30 @@ def upwork_proposal(lead, first):
             f"first 30 days?\n\nUsama")
 
 
+CRM_UPWORK_TITLE = re.compile(r"go\s?high\s?level|high\s?level|\bghl\b|hubspot|\bcrm\b|funnel|automation|"
+                              r"zapier|workflow|lead\s?connector|snapshot|saas mode", re.I)
+
+
+def upwork_role_messages(lead, first):
+    """Upwork jobs that are not GHL / HubSpot roles (an SDR, a VA...): the normal LinkedIn sequence for the real role."""
+    title = re.split(r"\s+[–—|-]\s+|\s*\(|,|:", str(lead.get("title") or ""))[0].strip() or "open role"
+    t = title.lower()
+    cat = ("Lead Generation" if re.search(r"sales development|\bsdr\b|\bbdr\b|appointment|setter|lead gen", t) else
+           "Virtual Assistant" if re.search(r"assistant|\bva\b|admin", t) else
+           "SEO" if "seo" in t else "Performance Marketing" if re.search(r"ads|media buyer|ppc|marketing", t) else
+           "Website Support" if re.search(r"wordpress|developer|website", t) else
+           "Design & Video" if re.search(r"design|graphic|video", t) else "Customer Service")
+    l = {"company": lead["company"], "role": title, "category": cat, "skills": ""}
+    role, company = msg_role(l), clean_company(lead["company"])
+    f = fix_case(first)
+    note = (f"Hi {f}, " if f else "Hi, ") + (f"noticed {company} is hiring for {article(role)}. Curious, have you found "
+                                             f"the right person out of the applicants yet, or still going through them? "
+                                             f"Thought it'd be good to connect!")
+    if len(note) > 300:
+        note = note[:297].rsplit(" ", 1)[0] + "..."
+    return [note] + linkedin_messages(l, first)
+
+
 def upwork_messages(lead, first):
     """Upwork clients are contacted on LinkedIn, so they get the same sequence as LinkedIn rows,
     written for GoHighLevel: connection note, DM after accept, follow-up 1, follow-up 2."""
@@ -544,7 +568,7 @@ def upwork_messages(lead, first):
     if len(note) > 300:
         note = note[:297].rsplit(" ", 1)[0] + "..."
     sk = join_skills(skills[:3])
-    who = (f"We work with remote professionals experienced in {tool}, {sk}." if sk
+    who = (f"We work with remote professionals experienced in {join_skills([tool] + skills[:2])}." if sk
            else "We work with remote {tool} specialists who do this work every day.")
     dm = (f"Thanks for connecting, {first}!" if first else "Thanks for connecting!") + \
         f" Saw your {tool} opening at {company}. {who} Would it help to see a couple of profiles that match your post?"
@@ -744,7 +768,9 @@ BAD_LOCAL = ["noreply", "no-reply", "donotreply", "privacy", "legal", "abuse", "
              "unsubscribe", "billing", "invoice", "accounts", "example", "test", "user", "email", "name",
              "yourname", "press", "media", "dmca", "security", "compliance", "gdpr",
              "enroll", "admission", "orders", "booking", "reservation", "donate", "donation", "membership",
-             "members", "events", "bug", "training", "learning", "course", "academy"]
+             "members", "events", "bug", "training", "learning", "course", "academy",
+             "shareholder", "investor", "affiliate", "partners"]
+BAD_LOCAL_EXACT = {"care", "customercare", "customer.care", "customer-care"}   # exact only, so careers@ still works
 BAD_DOMAIN = ["example.com", "domain.com", "sentry", "wixpress", "godaddy", "squarespace", "wordpress",
               "email.com", "yourdomain", "company.com", "mysite", "schema.org", "w3.org"]
 HIRING_LOCAL = ["careers", "career", "jobs", "job", "hr", "hiring", "recruit", "talent", "people", "work",
@@ -795,7 +821,7 @@ def find_email(website):
     good = []
     for e in found:
         local, _, dom = e.partition("@")
-        if any(b in local for b in BAD_LOCAL) or any(b in dom for b in BAD_DOMAIN):
+        if any(b in local for b in BAD_LOCAL) or local in BAD_LOCAL_EXACT or any(b in dom for b in BAD_DOMAIN):
             continue
         if re.search(r"\.(png|jpe?g|gif|svg|webp|css|js)$", e) or len(local) > 40:
             continue
@@ -1027,7 +1053,8 @@ def main():
         for u in fresh_up:
             p = free_founder(u["company"])
             first = p["first"] if p else ""
-            up_msgs = upwork_messages(u, first)
+            up_msgs = upwork_messages(u, first) if CRM_UPWORK_TITLE.search(u["title"]) \
+                else upwork_role_messages(u, first)
             up_rows.append({
                 "key": norm(u["company"]),
                 "date": today.strftime("%Y-%m-%d"),
