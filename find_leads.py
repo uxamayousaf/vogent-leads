@@ -226,7 +226,8 @@ CATEGORIES = {
 # ---------- Recruiter / agency filter (add names anytime, lowercase) ----------
 AGENCY_BLOCKLIST = [
     # job boards and gig marketplaces (not employers)
-    "isarta", "goodwork", "teema", "mercor", "outlier ai", "alignerr", "dataannotation", "data annotation tech",
+    "isarta", "goodwork", "teema", "tech ladies", "powertofly", "opentrain", "outlier", "invisible technologies",
+    "handshake ai", "scale ai", "turing", "mercor", "outlier ai", "alignerr", "dataannotation", "data annotation tech",
     "braintrust", "toptal", "crossover", "remotasks", "micro1",
     "robert half", "insight global", "randstad", "adecco", "teksystems", "kforce",
     "aerotek", "kelly services", "manpower", "express employment", "beacon hill",
@@ -373,7 +374,10 @@ IT_STAFFING_NAME_RE = re.compile(r"\b(?:it solutions|infotech|info tech|technolo
 TINY_CLUE_RE = re.compile(r"small (?:business|team|company|firm|family)|family[- ]owned|owner[- ]operated|"
                           r"solo(?:preneur)?|boutique|our founder|the founder|work directly with (?:the )?(?:founder|owner|ceo)|"
                           r"report(?:ing)? (?:directly )?to (?:the )?(?:founder|owner|ceo)", re.I)
-HARD_LOCAL_TITLE_RE = re.compile(r"american accent|\b(?:us|u\.s\.|usa|uk|canada)[- ]based\b|\blicensed\b|\bhotel\b|"
+HARD_LOCAL_TITLE_RE = re.compile(r"american accent|\bw-?2\b|\benterprise\b|\bregistered\b|physician|neurolog|"
+                                 r"\bnurse\b|\brn\b|dietitian|therapist|attorney|lawyer|pharmacist|dentist|"
+                                 r"psycholog|counselor|clinician|\bmd\b|\bcpa\b|ai (?:training|trainer|finance review|"
+                                 r"review)|\brlhf\b|annotat|\b(?:us|u\.s\.|usa|uk|canada)[- ]based\b|\blicensed\b|\bhotel\b|"
                                  r"guest (?:experience|service|services)|front desk|concierge", re.I)
 ONSITE_PHRASES = [
     "on-site", "onsite", "on site", "in office", "in-office", "in person",
@@ -482,7 +486,8 @@ def is_agency(company, industry, desc, title=""):
         return True                              # VA / EA roles: direct hires only
     if IT_STAFFING_NAME_RE.search(company) and re.search(r"consultant|developer|engineer|architect", title, re.I):
         return True                              # IT services firm placing someone at its client
-    if re.search(r"\bhire(?:d)?\b|hired|recruit|talent|staffing|\bjobs?\b|careers?\b", re.sub(r"(?<=[a-z])(?=[A-Z])", " ", company), re.I):
+    if re.search(r"\bhire(?:d)?\b|hired|recruit|talent|staffing|\bjobs?\b|careers?\b", re.sub(r"(?<=[a-z])(?=[A-Z])", " ", company), re.I) \
+            or re.search(r"staffing|recruit", WEBSITE_OF.get(company, ""), re.I):
         return True                              # hiring / recruiting platforms ("HiredBuddy", "TalentHub")
     if "staffing" in ind or "recruit" in ind:
         return True
@@ -689,6 +694,8 @@ def decide_work(row, title, desc, page_tag="", remote_hit=False):
     city = bool(CITY_LOC_RE.search(loc)) and "remote" not in loc.lower() and not state_wide
     if page_tag == "Remote" or loc_remote or "remote" in title.lower():
         return "Remote"
+    if TITLE_CITY_RE.search(title):
+        return "On-site"                       # "Copywriter - NYC", "Data Analyst (Omaha, NE)"
     if city and rem:
         return "Remote"                        # a clear phrase ("fully remote") beats the office's city
     if city:
@@ -703,6 +710,11 @@ def decide_work(row, title, desc, page_tag="", remote_hit=False):
 # "Fremont, CA", "Austin, Texas, United States", "San Francisco Bay Area": a city or metro, not country-wide
 CITY_LOC_RE = re.compile(r"^[^,]+,\s*(?:[A-Z]{2}|[A-Z][a-z]+(?: [A-Z][a-z]+)?)(?:,\s*United States)?$|"
                          r"(?:metropolitan|metro|bay) area|greater .+ area", re.I)
+
+
+TITLE_CITY_RE = re.compile(r"\([^)]*,\s*[A-Z]{2}\)|\b(?:nyc|new york city|los angeles|chicago|san francisco|boston|"
+                           r"seattle|atlanta|dallas|houston|miami|denver|austin|omaha|philadelphia|phoenix|"
+                           r"san diego|nashville|charlotte|portland|minneapolis|detroit)\b", re.I)
 
 
 PAGE_TAG_CACHE = {}
@@ -841,6 +853,7 @@ def parse_size(raw):
 
 PEOPLE_CACHE = {}
 STAFF_COUNT = {}
+WEBSITE_OF = {}                  # company -> website (for the staffing check)
 COMPANY_HQ = {}                  # company page "Headquarters" text                 # people on LinkedIn for the company (splits 11-50 into 11-20 and 21-50)
 
 
@@ -1237,6 +1250,10 @@ def main():
                         if wrong_title(title, cat_name, desc):
                             ex_role.add(key)                             # in-store, off-target, intern, gig
                             continue
+                        if text(row.get("site")) not in ("linkedin", "") and not (CRM_TITLE_RE.search(title) or
+                                                                       GHL_RE.search(title)):
+                            ex_role.add(key)
+                            continue                                     # other sites: GHL / CRM titles only
                         if regexes and not any(r.search(title + " " + desc) for r in regexes):
                             continue
                         co_key = re.sub(r"\W+", "", company.lower())
@@ -1259,6 +1276,10 @@ def main():
                                     company_url = cand
                                     break
                         size_label, size_min, page_industry, website = company_size(company_url, row)
+                        WEBSITE_OF[company] = website or text(row.get("company_url_direct"))
+                        if is_agency(company, industry, desc, title):
+                            ex_agency.add(key)
+                            continue                                     # website shows a staffing firm
                         if size_min is not None and size_min > MAX_EMPLOYEES:
                             ex_big.add(key)
                             continue
