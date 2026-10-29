@@ -700,10 +700,13 @@ def decide_work(row, title, desc, page_tag="", remote_hit=False):
         return "Remote"                        # a clear phrase ("fully remote") beats the office's city
     if city:
         return "On-site"                       # a city location without "Remote" in the title: treat as office job
-    if rem or remote_hit:
-        return "Remote"                        # wide location + clear remote phrase or LinkedIn's Remote filter
-    if any(w in d for w in REMOTE_WORDS):
-        return "Not confirmed"
+    says_remote = any(w in d for w in REMOTE_WORDS)
+    if rem:
+        return "Remote"                        # clear phrase in the post ("fully remote", "100% remote"...)
+    if remote_hit and says_remote:
+        return "Remote"                        # LinkedIn's Remote filter AND the post itself mentions remote
+    if says_remote or remote_hit:
+        return "Not confirmed"                 # one weak signal only: never pitched as remote
     return "Not stated"
 
 
