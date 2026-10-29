@@ -172,7 +172,8 @@ GROWING = set()                          # companies posting 2+ matching roles t
 NONPROFIT_IND = re.compile(r"non-?profit|philanthrop|civic|social organization|government|public policy|"
                            r"religious|fund-?raising|museums?|libraries", re.I)
 NONPROFIT_NAME = re.compile(r"\b(foundation|council|association|society|charity|charitable|institute|"
-                            r"federation|ministries|church|alliance|credit union)\b", re.I)
+                            r"federation|ministries|church|alliance|credit union|university|college|school|board|"
+                            r"asu)\b", re.I)
 UNKNOWN_SIZE_MAX = 10                    # unknown-size companies per day, and only with a strong signal
 
 
@@ -379,7 +380,7 @@ def _old_linkedin_company_url(company):
 # ---------- Upwork GHL leads (Apify), named clients only ----------
 UPWORK_ENABLED = True
 UPWORK_ACTOR = "flash_mage~upwork"
-UPWORK_QUERIES = ["GoHighLevel", "HighLevel", "GHL", "HubSpot"]   # GHL and HubSpot (the CRM roles)
+UPWORK_QUERIES = ["GoHighLevel", "HighLevel", "GHL"]   # Upwork: GoHighLevel jobs only
 UPWORK_LIMIT = 95                        # newest GHL jobs checked per day (about $0.30, the whole Apify budget)
 UPWORK_COST_CAP_USD = 0.30
 UPWORK_RECONTACT_DAYS = 30               # a past Upwork client posting a NEW GHL job after 30+ days is contacted again
@@ -544,6 +545,9 @@ def upwork_leads(today, start_rank):
         size = get_path(it, "buyer.company.profile.size")
         spent = get_path(it, "buyer.stats.totalCharges.amount", 0) or 0
         verified = get_path(it, "buyer.isPaymentMethodVerified", True)
+        if not UPWORK_GHL_RE.search(str(it.get("title") or "") + " " + desc[:400]):
+            drop["not_ghl"] = drop.get("not_ghl", 0) + 1
+            continue                     # Upwork: GoHighLevel jobs only (title or the start of the post)
         if not verified:
             drop["not_verified"] += 1
             continue                     # payment method verified (new clients with $0 spent are fine)
@@ -596,6 +600,7 @@ def upwork_proposal(lead, first):
             f"first 30 days?\n\nUsama")
 
 
+UPWORK_GHL_RE = re.compile(r"go\s?high\s?level|\bhigh\s?level\b|\bghl\b|lead\s?connector", re.I)
 CRM_UPWORK_TITLE = re.compile(r"go\s?high\s?level|high\s?level|\bghl\b|hubspot|\bcrm\b|funnel|automation|"
                               r"zapier|workflow|lead\s?connector|snapshot|saas mode", re.I)
 
@@ -900,7 +905,8 @@ def find_email(website):
     good = []
     for e in found:
         local, _, dom = e.partition("@")
-        if any(b in local for b in BAD_LOCAL) or local in BAD_LOCAL_EXACT or any(b in dom for b in BAD_DOMAIN):
+        if any(b in local for b in BAD_LOCAL) or local in BAD_LOCAL_EXACT or any(b in dom for b in BAD_DOMAIN) \
+                or re.search(r"staffing|recruit|talent", dom):
             continue
         if re.search(r"\.(png|jpe?g|gif|svg|webp|css|js)$", e) or len(local) > 40:
             continue
@@ -1175,6 +1181,7 @@ def main():
                                              f'{UPWORK_STATS.get("not_us", 0)} not US/Canada · '
                                              f'{UPWORK_STATS.get("commission", 0)} commission · '
                                              f'{UPWORK_STATS.get("big", 0)} too big · '
+                                             f'{UPWORK_STATS.get("not_ghl", 0)} not GHL · '
                                              f'{UPWORK_STATS.get("wrong_role", 0)} wrong role · '
                                              f'{UPWORK_STATS["named"] - UPWORK_STATS["new"]} already contacted · '
                                              f'{UPWORK_STATS["new"]} new'})[:300])
