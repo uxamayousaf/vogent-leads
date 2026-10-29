@@ -642,6 +642,7 @@ def upwork_messages(lead, first):
             else "finding a strong {tool} specialist is not easy")
     fu1 = (f"{'Hi ' + first if first else 'Hi'}, {hard}, which is why I reached out. I run Vogent Labs, where we "
            f"help businesses hire dedicated remote professionals at a much lower cost than a local hire. "
+           f"No upfront fee: you only pay once your hire starts, and we replace them free if it's not the right fit. "
            f"Happy to share a couple of profiles that match your {tool} post if useful.")
     fu2 = (f"{'Hey ' + first if first else 'Hi'}, checking back on the {tool} opening. If you're still hiring, "
            f"I'd be happy to share a couple of relevant profiles. If you've already filled it, no worries at all!")
@@ -815,6 +816,7 @@ def linkedin_messages(lead, first):
         hard = f"finding the right {role} is not easy"
     fu1 = (f"{'Hi ' + first if first else 'Hi'}, {hard}, which is why I reached out. I run Vogent Labs, where we "
            f"help businesses hire dedicated remote professionals at a much lower cost than a local hire. "
+           f"No upfront fee: you only pay once your hire starts, and we replace them free if it's not the right fit. "
            f"Happy to share a couple of profiles that match your {role} post if useful.")
     fu2 = (f"{'Hey ' + first if first else 'Hi'}, checking back on the {role} opening. If you're still hiring, "
            f"I'd be happy to share a couple of relevant profiles. If you've already filled it, no worries at all!")
@@ -971,25 +973,29 @@ def build_email(lead, email, kind, first=""):
             f"Quick question about your hire at {company}"
 
     fit = (f"We have candidates with experience in {skills} who could be a good fit for what you're "
-           f"looking for.") if skills else "We have candidates who could be a good fit for what you're looking for."
+           f"looking for, at a much lower cost than a local hire.") if skills else \
+        "We have candidates who could be a good fit for what you're looking for, at a much lower cost than a local hire."
     body1 = (f"{hi}\n\nI noticed {company} is hiring for {article(role)} and thought I'd reach out.\n\n"
              f"I run Vogent Labs, where we help businesses hire dedicated remote professionals. {fit}\n\n"
              f"We handle the staffing and payroll on our end, so you can focus on getting the right person "
              f"into your team.\n\nWould you be open to reviewing a couple of profiles?\n\n"
              f"Best,\n{SIGNATURE}")
-    pros = (f"a couple of remote professionals with experience in {skills}" if skills
-            else "a couple of remote professionals who could be a fit")
-    fu1 = (f"{hi}\n\nWanted to follow up on my note about the {role} position.\n\n"
-           f"If you're still reviewing candidates, happy to share {pros}, at a much lower cost than a local "
-           f"hire.\n\nWould that be useful?\n\nBest,\n{SIGNATURE}")
-    fu2 = (f"{hi}\n\nNot sure if you've filled the {role} position yet.\n\n"
-           f"At Vogent Labs, we help companies bring on dedicated remote talent while managing the staffing and "
-           f"payroll on our side.\n\nIf you're still exploring options, I'd be happy to share some relevant "
-           f"profiles. Or if a quick call is easier, you can pick a time here: {CALENDLY_URL}\n\n"
-           f"Best,\n{SIGNATURE}")
-    fu3 = (f"{hi}\n\nI'll leave it here for now.\n\nIf the {role} position is still open, happy to share a "
-           f"couple of candidates. And if you've already hired, perhaps we can connect for future openings.\n\n"
-           f"All the best with the search!\n\n{SIGNATURE}")
+    with_sk = f" with experience in {skills}" if skills else ""
+    # Follow-up 1: the offer (risk-free terms, same as the agency emails)
+    fu1 = (f"{hi}\n\nFollowing up on the {role} position. Happy to send over a couple of profiles{with_sk}, "
+           f"free to review with no commitment.\n\n"
+           f"How it works: there's no upfront fee, you only pay once your hire is onboarded, and if they're not "
+           f"the right fit we replace them at no cost.\n\nWant me to send two profiles over?\n\nBest,\n{SIGNATURE}")
+    # Follow-up 2: the pain of hiring locally, plus the booking link
+    fu2 = (f"{hi}\n\nNot sure if you've filled the {role} role yet. Hiring locally usually means weeks of screening "
+           f"and a full local salary. With Vogent Labs you get a dedicated remote professional working your hours, "
+           f"we handle staffing and payroll, and you only start paying once they've joined your team.\n\n"
+           f"If it's easier to talk it through, you can pick a time here: {CALENDLY_URL}. Or just reply and I'll send "
+           f"a couple of profiles.\n\nBest,\n{SIGNATURE}")
+    # Follow-up 3: close, with the risk-free reminder
+    fu3 = (f"{hi}\n\nI'll leave it here for now. If the {role} position is still open, I'm happy to share a couple "
+           f"of candidates, with no upfront fee and nothing to pay until your hire starts. And if you've already "
+           f"hired, perhaps we can connect for future openings.\n\nAll the best with the search!\n\n{SIGNATURE}")
     subject = subject[:1].upper() + subject[1:]
     return subject, body1, [fu1, fu2, fu3], variant
 
