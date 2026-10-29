@@ -639,18 +639,20 @@ def upwork_messages(lead, first):
     if len(note) > 300:
         note = note[:297].rsplit(" ", 1)[0] + "..."
     sk = join_skills(skills[:3])
-    who = (f"We work with remote professionals experienced in {join_skills([tool] + skills[:2])}." if sk
-           else "We work with remote {tool} specialists who do this work every day.")
+    who = (f"We work with remote professionals experienced in {join_skills([tool] + skills[:2])}, and there's no "
+           f"upfront fee: you only pay once your hire starts." if sk
+           else f"We work with remote {tool} specialists who do this work every day, and there's no upfront fee: "
+                f"you only pay once your hire starts.")
     dm = (f"Thanks for connecting, {first}!" if first else "Thanks for connecting!") + \
         f" Saw your {tool} opening at {company}. {who} Would it help to see a couple of profiles that match your post?"
     hard = (f"finding someone strong in both {tool} and {skills[0]} is not easy" if skills
-            else "finding a strong {tool} specialist is not easy")
-    fu1 = (f"{'Hi ' + first if first else 'Hi'}, {hard}, which is why I reached out. I run Vogent Labs, where we "
-           f"help businesses hire dedicated remote professionals at a much lower cost than a local hire. "
-           f"No upfront fee: you only pay once your hire starts, and we replace them free if it's not the right fit. "
-           f"Happy to share a couple of profiles that match your {tool} post if useful.")
-    fu2 = (f"{'Hey ' + first if first else 'Hi'}, checking back on the {tool} opening. If you're still hiring, "
-           f"I'd be happy to share a couple of relevant profiles. If you've already filled it, no worries at all!")
+            else f"finding a strong {tool} specialist is not easy")
+    fu1 = (f"{'Hi ' + first if first else 'Hi'}, {hard}, which is why I reached out. At Vogent Labs, we place dedicated remote "
+           f"professionals at a much lower cost than a local hire, and if the person isn't the right fit, we replace "
+           f"them free. Happy to share a couple of profiles that match your {tool} post if useful.")
+    fu2 = (f"{'Hey ' + first if first else 'Hi'}, checking back on the {tool} opening. If you're still hiring, I can "
+           f"send a couple of relevant profiles today, with nothing to pay until your hire starts. Or if it's easier to "
+           f"talk it through, you can pick a time here: {CALENDLY_URL}. If you've already filled it, no worries at all!")
     return [note, dm, fu1, fu2]
 
 
@@ -799,7 +801,8 @@ def onsite_dm(lead, first):
     who = f" We work with remote professionals experienced in {sk}." if sk else ""
     return ((f"Thanks for connecting, {first}!" if first else "Thanks for connecting!") +
             f" Saw your {role} opening at {company}. I know it's listed as {str(lead.get('work_type')).lower()}, "
-            f"but would you be open to a remote hire for it?{who}")
+            f"but would you be open to a remote hire for it? There's no upfront fee: you only pay once your hire "
+            f"starts.{who}")
 
 
 def linkedin_messages(lead, first):
@@ -808,8 +811,9 @@ def linkedin_messages(lead, first):
     role, company = msg_role(lead), clean_company(lead["company"])
     skills = skill_list(lead)
     sk3 = join_skills(skills[:3])
-    who = (f"We work with remote professionals experienced in {sk3}." if sk3
-           else "We work with remote professionals who do this kind of work every day.")
+    who = (f"We work with remote professionals experienced in {sk3}, and there's no upfront fee: you only pay once "
+           f"your hire starts." if sk3 else "We work with remote professionals who do this kind of work every day, and "
+           "there's no upfront fee: you only pay once your hire starts.")
     dm = (f"Thanks for connecting, {first}!" if first else "Thanks for connecting!") + \
         (f" Saw your {role} opening at {company}. {who} Would it help to see a couple of profiles that match "
          f"your post?")
@@ -819,12 +823,12 @@ def linkedin_messages(lead, first):
         hard = f"finding someone really strong in {skills[0]} is not easy"
     else:
         hard = f"finding the right {role} is not easy"
-    fu1 = (f"{'Hi ' + first if first else 'Hi'}, {hard}, which is why I reached out. I run Vogent Labs, where we "
-           f"help businesses hire dedicated remote professionals at a much lower cost than a local hire. "
-           f"No upfront fee: you only pay once your hire starts, and we replace them free if it's not the right fit. "
-           f"Happy to share a couple of profiles that match your {role} post if useful.")
-    fu2 = (f"{'Hey ' + first if first else 'Hi'}, checking back on the {role} opening. If you're still hiring, "
-           f"I'd be happy to share a couple of relevant profiles. If you've already filled it, no worries at all!")
+    fu1 = (f"{'Hi ' + first if first else 'Hi'}, {hard}, which is why I reached out. At Vogent Labs, we place dedicated remote "
+           f"professionals at a much lower cost than a local hire, and if the person isn't the right fit, we replace "
+           f"them free. Happy to share a couple of profiles that match your {role} post if useful.")
+    fu2 = (f"{'Hey ' + first if first else 'Hi'}, checking back on the {role} opening. If you're still hiring, I can "
+           f"send a couple of relevant profiles today, with nothing to pay until your hire starts. Or if it's easier to "
+           f"talk it through, you can pick a time here: {CALENDLY_URL}. If you've already filled it, no worries at all!")
     return [dm, fu1, fu2]
 
 
