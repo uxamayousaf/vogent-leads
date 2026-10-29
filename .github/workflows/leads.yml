@@ -13,7 +13,7 @@ jobs:
       fail-fast: false
       max-parallel: 20
       matrix:
-        category: ["Remote Boards", "CRM Automation", "AI Automation", "SEO", "Performance Marketing", "Customer Service",
+        category: ["Remote Boards", "Other Remote", "CRM Automation", "AI Automation", "SEO", "Performance Marketing", "Customer Service",
                    "Bookkeeping", "Virtual Assistant", "Lead Generation", "Social Media",
                    "Content Writing", "Email Marketing", "Design & Video", "Website Support"]
         region: ["USA"]
