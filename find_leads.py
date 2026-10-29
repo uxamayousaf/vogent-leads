@@ -36,7 +36,7 @@ MAX_EMPLOYEES = 50      # founder-led small companies only (unknown size is kept
 # rank = order in your sheet. scale = fewer results per search for smaller markets.
 # Each location: (LinkedIn search location, short name shown in sheet)
 REGIONS = {
-    "USA": {"enabled": True, "rank": 1, "scale": 1.0, "locations": [("United States", "USA")]},
+    "USA": {"enabled": True, "rank": 1, "scale": 1.8, "locations": [("United States", "USA")]},   # deeper search
 }
 SITES = ["linkedin", "indeed", "zip_recruiter", "google"]   # same search on all four job sites
 SOURCE_LABELS = {"linkedin": "LinkedIn", "indeed": "Indeed", "zip_recruiter": "ZipRecruiter", "google": "Google Jobs",
@@ -87,6 +87,15 @@ CATEGORIES = {
         # Remote-first job boards (every job is remote); the role label comes from the job title
         "enabled": True, "deep_results": 0, "normal_results": 0, "regions": ["USA"],
         "deep_searches": [], "searches": [], "must_mention": [],
+    },
+    "Other Remote": {
+        # Any other remote role (IT, HR, operations...): only used to fill the day after the priority roles
+        "enabled": True, "deep_results": 60, "normal_results": 40, "regions": ["USA"],
+        "deep_searches": ["work from anywhere", "remote worldwide", "remote contractor"],
+        "searches": ["Data Entry", "Recruiter", "HR Coordinator", "Customer Success", "Project Coordinator",
+                     "QA Tester", "Software Developer", "Full Stack Developer", "Data Analyst",
+                     "Operations Coordinator", "Technical Support", "Marketing Coordinator"],
+        "must_mention": [],
     },
     "SEO": {
         # US / UK clients only, so it is searched in those two region groups
@@ -344,7 +353,8 @@ WORLDWIDE_RE = re.compile(r"work from anywhere|anywhere in the world|worldwide|w
                           r"any time ?zone|all time ?zones|"
                           r"\basync(?:hronous)?\b|offshore|overseas", re.I)
 # Hard local requirements: the job cannot be done from Pakistan
-HARD_LOCAL_RE = re.compile(r"\bw-?2 (?:only|employee|employment|position|role)\b|"
+HARD_LOCAL_RE = re.compile(r"american accent|native (?:us|u\.s\.|american) english|us english accent|"
+                           r"\bw-?2 (?:only|employee|employment|position|role)\b|"
                            r"must be (?:a )?(?:u\.?s\.?|united states|us) citizen|"
                            r"(?:u\.?s\.?|us) citizenship (?:is )?required|security clearance|"
                            r"must (?:live|reside|be located|be based) (?:in|within|near)|local (?:candidates|applicants) only|"
@@ -363,7 +373,7 @@ IT_STAFFING_NAME_RE = re.compile(r"\b(?:it solutions|infotech|info tech|technolo
 TINY_CLUE_RE = re.compile(r"small (?:business|team|company|firm|family)|family[- ]owned|owner[- ]operated|"
                           r"solo(?:preneur)?|boutique|our founder|the founder|work directly with (?:the )?(?:founder|owner|ceo)|"
                           r"report(?:ing)? (?:directly )?to (?:the )?(?:founder|owner|ceo)", re.I)
-HARD_LOCAL_TITLE_RE = re.compile(r"\b(?:us|u\.s\.|usa|uk|canada)[- ]based\b|\blicensed\b|\bhotel\b|"
+HARD_LOCAL_TITLE_RE = re.compile(r"american accent|\b(?:us|u\.s\.|usa|uk|canada)[- ]based\b|\blicensed\b|\bhotel\b|"
                                  r"guest (?:experience|service|services)|front desk|concierge", re.I)
 ONSITE_PHRASES = [
     "on-site", "onsite", "on site", "in office", "in-office", "in person",
@@ -472,6 +482,8 @@ def is_agency(company, industry, desc, title=""):
         return True                              # VA / EA roles: direct hires only
     if IT_STAFFING_NAME_RE.search(company) and re.search(r"consultant|developer|engineer|architect", title, re.I):
         return True                              # IT services firm placing someone at its client
+    if re.search(r"\bhire(?:d)?\b|hired|recruit|talent|staffing|\bjobs?\b|careers?\b", re.sub(r"(?<=[a-z])(?=[A-Z])", " ", company), re.I):
+        return True                              # hiring / recruiting platforms ("HiredBuddy", "TalentHub")
     if "staffing" in ind or "recruit" in ind:
         return True
     if any(re.search(r"\b" + re.escape(b) + r"\b", c) for b in AGENCY_BLOCKLIST):
@@ -577,6 +589,11 @@ def best_category(title, category):
         return category
     if category == "Remote Boards":
         return "CRM Automation"                  # remote boards only bring GHL / HubSpot / CRM jobs
+    if category == "Other Remote":
+        for cat, rx in ROLE_FIT_RE.items():
+            if rx.search(title):
+                return cat
+        return "Other"
     if ROLE_FIT_RE.get(category) and ROLE_FIT_RE[category].search(title):
         return category
     for cat, rx in ROLE_FIT_RE.items():
@@ -591,8 +608,17 @@ def best_category(title, category):
     return "CRM Automation" if category == "Remote Boards" else category
 
 
+OTHER_BLOCK_RE = re.compile(r"\b(account executive|sales representative|sales rep|account manager|controller|"
+                            r"founding)\b", re.I)
+
+
 def wrong_title(title, category, desc=""):
     """True for roles we should not pitch: in-store, off-target, no budget, gig listings, or not this category's work."""
+    if category == "Other Remote":
+        # any role is fine (IT, HR, data...), only the hard no's apply
+        return bool(NOT_REMOTE_TITLE_RE.search(title) or OTHER_BLOCK_RE.search(title) or NO_BUDGET_TITLE_RE.search(title)
+                    or GIG_TITLE_RE.search(title) or HARD_LOCAL_TITLE_RE.search(title)
+                    or NOT_A_HIRE_TITLE_RE.search(title) or NOT_A_HIRE_DESC_RE.search(desc))
     if NOT_REMOTE_TITLE_RE.search(title) or OFF_TARGET_TITLE_RE.search(title):
         return True
     if NO_BUDGET_TITLE_RE.search(title) or GIG_TITLE_RE.search(title):
@@ -654,16 +680,29 @@ def decide_work(row, title, desc, page_tag="", remote_hit=False):
         return "Hybrid"
     if on and not rem:
         return "On-site"
-    loc_remote = "remote" in text(row.get("location")).lower() or str(row.get("is_remote")).lower() == "true" \
+    loc = text(row.get("location"))
+    loc_remote = "remote" in loc.lower() or str(row.get("is_remote")).lower() == "true" \
         and text(row.get("site")) != "linkedin"
-    if page_tag == "Remote" or loc_remote or "remote" in title.lower() or rem:
+    # LinkedIn lists remote jobs with a country or wide area ("United States"); on-site / hybrid jobs with a city
+    first_part = loc.split(",")[0].strip().lower()
+    state_wide = bool(re.fullmatch(r"(?:" + US_STATES + r")", first_part))       # "California, United States"
+    city = bool(CITY_LOC_RE.search(loc)) and "remote" not in loc.lower() and not state_wide
+    if page_tag == "Remote" or loc_remote or "remote" in title.lower():
         return "Remote"
-    says_remote = any(w in d for w in REMOTE_WORDS)
-    if remote_hit and says_remote:
-        return "Remote"
-    if says_remote or remote_hit:
+    if city and rem:
+        return "Remote"                        # a clear phrase ("fully remote") beats the office's city
+    if city:
+        return "On-site"                       # a city location without "Remote" in the title: treat as office job
+    if rem or remote_hit:
+        return "Remote"                        # wide location + clear remote phrase or LinkedIn's Remote filter
+    if any(w in d for w in REMOTE_WORDS):
         return "Not confirmed"
     return "Not stated"
+
+
+# "Fremont, CA", "Austin, Texas, United States", "San Francisco Bay Area": a city or metro, not country-wide
+CITY_LOC_RE = re.compile(r"^[^,]+,\s*(?:[A-Z]{2}|[A-Z][a-z]+(?: [A-Z][a-z]+)?)(?:,\s*United States)?$|"
+                         r"(?:metropolitan|metro|bay) area|greater .+ area", re.I)
 
 
 PAGE_TAG_CACHE = {}
