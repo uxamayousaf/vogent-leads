@@ -970,8 +970,8 @@ def build_email(lead, email, kind, first=""):
         subject = f"Quick question about your {role} hire" if len(role) <= 40 else \
             f"Quick question about your hire at {company}"
 
-    fit = (f"We may have candidates with experience in {skills} who could be a good fit for what you're "
-           f"looking for.") if skills else "We may have candidates who could be a good fit for what you're looking for."
+    fit = (f"We have candidates with experience in {skills} who could be a good fit for what you're "
+           f"looking for.") if skills else "We have candidates who could be a good fit for what you're looking for."
     body1 = (f"{hi}\n\nI noticed {company} is hiring for {article(role)} and thought I'd reach out.\n\n"
              f"I run Vogent Labs, where we help businesses hire dedicated remote professionals. {fit}\n\n"
              f"We handle the staffing and payroll on our end, so you can focus on getting the right person "
