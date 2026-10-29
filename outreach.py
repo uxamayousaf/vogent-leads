@@ -137,9 +137,14 @@ def load_candidates():
     return leads
 
 
+def onsite_ask(l):
+    """On-site / hybrid job at a company with 1 to 10 staff: worth asking if they would hire remotely."""
+    return l.get("work_type") in ("On-site", "Hybrid") and l.get("size_min") is not None and l["size_min"] <= 10
+
+
 def eligible(l):
-    if l.get("work_type") not in OUTREACH_WORK_TYPES:
-        return False                       # clearly in-office jobs stay in the Leads tab only
+    if l.get("work_type") not in OUTREACH_WORK_TYPES and not onsite_ask(l):
+        return False                       # office jobs only at 1-10 staff companies (asked about remote)
     if l.get("region") not in REGION_ORDER:
         return False
     if l.get("category") in ("RevOps",):
@@ -220,7 +225,7 @@ def rank_key(l):
     except ValueError:
         newest = 0
     ghl = 0 if "GHL" in str(l.get("priority") or "") else 1
-    return (role_tier(l), size_tier(l), 0 if l.get("worldwide") else 1, ghl, newest)
+    return (role_tier(l), 1 if onsite_ask(l) else 0, size_tier(l), 0 if l.get("worldwide") else 1, ghl, newest)
 
 
 # ---------- 2. Find decision makers with Apify ----------
@@ -413,6 +418,12 @@ key what's we're you'll we've it's let's value values vision culture story offer
 who what why how""".split())
 
 
+# Phrases and product names that look like company names but are not the client
+NOT_A_COMPANY_RE = re.compile(r"account[- ]based|looker|google|microsoft|hubspot|salesforce|highlevel|"
+                              r"zapier|monday|notion|shopify|wordpress|linkedin|facebook|meta ads|tiktok|amazon|"
+                              r"apple|canva|slack|openai|chatgpt|claude", re.I)
+
+
 def client_name(desc):
     """Only returns a name the job post itself states, and only if it looks like a real company name."""
     pats = [
@@ -427,7 +438,7 @@ def client_name(desc):
         for m in re.finditer(p, desc):
             name = re.sub(r"\s+", " ", m.group(1)).strip(" .,:")
             first = name.split(" ")[0].lower()
-            if first in NOT_A_NAME or len(name) < 3 or name.lower() in NOT_A_NAME:
+            if first in NOT_A_NAME or len(name) < 3 or name.lower() in NOT_A_NAME or NOT_A_COMPANY_RE.search(name):
                 continue
             tokens = [t.lower().strip("'’&.,") for t in re.split(r"[\s-]+", name)]
             if tokens and tokens[0] in GENERIC_WORDS:
@@ -443,7 +454,10 @@ def client_name(desc):
 
 
 # Domains that never identify the client (tools, social sites, mail providers)
-NOT_CLIENT_DOMAINS = re.compile(r"upwork|gohighlevel|highlevel|leadconnector|msgsndr|hubspot|google|youtube|youtu\.be|"
+NOT_CLIENT_DOMAINS = re.compile(r"monday|hunter|smartlead|instantly|lemlist|clay|asana|clickup|trello|atlassian|jira|"
+                                r"salesforce|pipedrive|intercom|mailchimp|klaviyo|semrush|ahrefs|looker|quickbooks|xero|"
+                                r"gusto|docusign|calendly|zendesk|freshdesk|gorgias|aircall|ringcentral|twilio|"
+                                r"upwork|gohighlevel|highlevel|leadconnector|msgsndr|hubspot|google|youtube|youtu\.be|"
                                 r"loom|calendly|facebook|fb\.com|instagram|linkedin|twitter|x\.com|tiktok|zapier|"
                                 r"make\.com|gmail|yahoo|outlook|hotmail|icloud|bit\.ly|tinyurl|canva|notion|figma|"
                                 r"dropbox|wix|squarespace|shopify\.com|wordpress\.(?:com|org)|godaddy|clickfunnels|"
@@ -459,6 +473,11 @@ def client_from_domain(desc):
         dom = m.group(1).lower()
         if NOT_CLIENT_DOMAINS.search(dom):
             continue
+        before = desc[max(0, m.start() - 60):m.start()].lower()
+        if re.search(r"\b(?:use|using|used|uses|tools?|platforms?|software|like|via|with|in|on|familiar|experience|"
+                     r"knowledge|proficien|stack|integrat)\W*(?:\w+\W+){0,3}$", before) and \
+                not re.search(r"\b(?:our|my|visit|website|site|check out|about us|learn more|see)\b", before):
+            continue                       # a tool they use, not the client's own website
         stem = dom.rsplit(".", 1)[0]
         name = " ".join(w.capitalize() for w in re.split(r"[-_]", stem) if w)
         if len(stem) >= 3 and name.lower() not in NOT_A_NAME:
@@ -542,6 +561,11 @@ def upwork_leads(today, start_rank):
         if commission_heavy(desc):
             drop["commission"] += 1
             continue
+        if not CRM_UPWORK_TITLE.search(title) and re.search(
+                r"\b(?:senior|sr\.?|lead|head|director|vp|chief|principal|manager|strategist|\bgm\b|"
+                r"general manager|account executive|sales rep|sales representative|fractional)\b", title, re.I):
+            drop["wrong_role"] = drop.get("wrong_role", 0) + 1
+            continue                       # non-GHL Upwork jobs follow the same title rules as LinkedIn
         if isinstance(size, (int, float)) and size > MAX_COMPANY_SIZE:
             drop["big"] += 1
             continue
@@ -759,6 +783,17 @@ def join_skills(skills):
 
 def skill_text(lead):
     return join_skills(skill_list(lead)[:3])
+
+
+def onsite_dm(lead, first):
+    """DM after accept for on-site / hybrid posts at tiny companies."""
+    first = fix_case(first)
+    role, company = msg_role(lead), clean_company(lead["company"])
+    sk = join_skills(skill_list(lead)[:3])
+    who = f" We work with remote professionals experienced in {sk}." if sk else ""
+    return ((f"Thanks for connecting, {first}!" if first else "Thanks for connecting!") +
+            f" Saw your {role} opening at {company}. I know it's listed as {str(lead.get('work_type')).lower()}, "
+            f"but would you be open to a remote hire for it?{who}")
 
 
 def linkedin_messages(lead, first):
@@ -1018,7 +1053,7 @@ def main():
                 continue
             unknown_n += 1
         email, kind = "", ""
-        if emailed < cap and l.get("size_min") is not None and looked < EMAIL_LOOKUP_MAX:
+        if emailed < cap and l.get("size_min") is not None and looked < EMAIL_LOOKUP_MAX and not onsite_ask(l):
             looked += 1
             email, kind = find_email(l.get("website", ""))
             if email and email.split("@")[-1].lower() in BLOCKED_DOMAINS:
@@ -1037,7 +1072,7 @@ def main():
             "title": l["title"],
             "work_type": l.get("work_type", ""),
             "category": l.get("category", ""),
-            "source": l.get("source", "LinkedIn"),
+            "source": l.get("source", "LinkedIn") + (f" · {l['work_type']}" if onsite_ask(l) else ""),
             "dm_name": p["name"] if p else "Find founder ↗",
             "dm_url": p["url"] if p else founder_search_url(l["company"], l.get("company_url", "")),
             "dm_title": p["title"] if p else "",
@@ -1057,6 +1092,8 @@ def main():
             first = p["first"] if p else ""
             linkedin_n += 1
             note, li = named_note(l.get("note", ""), first), linkedin_messages(l, first)
+            if onsite_ask(l):
+                li[0] = onsite_dm(l, first)     # the post says on-site: ask if a remote hire works
             rows.append({**base, "channel": "LinkedIn", "email": "", "note": note, "followup": li[0],
                          "messages": [note] + li, "email_status": "", "_lead": l})
 
@@ -1132,6 +1169,7 @@ def main():
                                              f'{UPWORK_STATS.get("not_us", 0)} not US/Canada · '
                                              f'{UPWORK_STATS.get("commission", 0)} commission · '
                                              f'{UPWORK_STATS.get("big", 0)} too big · '
+                                             f'{UPWORK_STATS.get("wrong_role", 0)} wrong role · '
                                              f'{UPWORK_STATS["named"] - UPWORK_STATS["new"]} already contacted · '
                                              f'{UPWORK_STATS["new"]} new'})[:300])
 
