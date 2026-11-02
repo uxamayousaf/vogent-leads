@@ -11,7 +11,7 @@ jobs:
     timeout-minutes: 300
     strategy:
       fail-fast: false
-      max-parallel: 20
+      max-parallel: 5        # fewer searches at once, so LinkedIn does not rate-limit us
       matrix:
         category: ["Remote Boards", "Other Remote", "CRM Automation", "AI Automation", "SEO", "Performance Marketing", "Customer Service",
                    "Bookkeeping", "Virtual Assistant", "Lead Generation", "Social Media",
