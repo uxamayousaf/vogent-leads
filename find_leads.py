@@ -98,6 +98,27 @@ CATEGORIES = {
                      "Operations Coordinator", "Technical Support", "Marketing Coordinator"],
         "must_mention": [],
     },
+    "More Remote Roles": {
+        # More roles that small US companies often hire remotely (only used to fill the day)
+        "enabled": True, "deep_results": 0, "normal_results": 40, "regions": ["USA"],
+        "deep_searches": [],
+        "searches": ["Operations Assistant", "Marketing Assistant", "Marketing Specialist", "E-commerce Specialist",
+                     "Amazon Specialist", "Shopify Developer", "Product Designer", "UI UX Designer",
+                     "Mobile App Developer", "React Developer", "Python Developer", "IT Support Specialist",
+                     "Recruiting Coordinator", "Transaction Coordinator", "Medical Billing Specialist",
+                     "Insurance Verification Specialist"],
+        "must_mention": [],
+    },
+    "Worldwide Hiring": {
+        # Posts that say the company hires outside the US. Also searched in LinkedIn's "Worldwide" location;
+        # those results are kept only when the company's head office is in the US.
+        "enabled": True, "deep_results": 0, "normal_results": 40, "regions": ["USA"],
+        "deep_searches": [],
+        "searches": ["anywhere in the world", "remote global", "remote international", "independent contractor",
+                     "remote LATAM", "remote Philippines", "offshore", "any time zone"],
+        "must_mention": [],
+        "extra_locations": [("Worldwide", "USA")],        # remote filter only, US head office required
+    },
     "SEO": {
         # US / UK clients only, so it is searched in those two region groups
         "enabled": True, "deep_results": 80, "normal_results": 40,
@@ -379,7 +400,60 @@ HARD_LOCAL_TITLE_RE = re.compile(r"american accent|\bw-?2\b|\benterprise\b|\breg
                                  r"\bnurse\b|\brn\b|dietitian|therapist|attorney|lawyer|pharmacist|dentist|"
                                  r"psycholog|counselor|clinician|\bmd\b|\bcpa\b|ai (?:training|trainer|finance review|"
                                  r"review)|\brlhf\b|annotat|\b(?:us|u\.s\.|usa|uk|canada)[- ]based\b|\blicensed\b|\bhotel\b|"
-                                 r"guest (?:experience|service|services)|front desk|concierge", re.I)
+                                 r"guest (?:experience|service|services)|front desk|concierge|"
+                                 r"(?:radio|patho|cardio|dermato|onco|anesthesio|uro|gastroentero|ophthalmo|hemato|"
+                                 r"nephro|pulmono)logist|teleradiolog|psychiatr|surgeon|veterinar|optometr|chiropract|"
+                                 r"paramedic|hygienist|midwi|sonograph|pharmacy tech|\bdoctor\b|\bdvm\b|\bdds\b|"
+                                 r"\blpn\b|\bcna\b|\bcrna\b|\bemt\b", re.I)
+# Scam-style or junk posts (home-based travel booking, "No Experience Needed", event recruiting ads)
+JUNK_COMPANIES = {"dreamscape", "premierdestinationgroup", "torentify"}
+JUNK_TITLE_RE = re.compile(r"no experience (?:needed|required|necessary)|let[\u2019']?s (?:connect|meet) at|meet us at|"
+                           r"visit (?:us|our booth) at|career fair|job fair|hiring event|travel bookings?\b|"
+                           r"data entry[^|]*(?:work from home|\bwfh\b)", re.I)
+TITLE_TAG_RE = re.compile(r"^(?:100%\s*|fully\s+)?(?:remote|online|virtual|work from home|wfh)(?:\s*\(.*\))?$|"
+                          r"^entry[- ]level$|^(?:part|full)[- ]time$|^hiring (?:now|immediately)$|^immediate start$|"
+                          r"^flexible (?:hours|schedule)$|^weekly pay$|^no experience.*$", re.I)
+
+
+def junk_post(title, company):
+    """True for scam-style posts: known junk companies, 'No Experience Needed', titles packed with tags."""
+    co = re.sub(r"(?:llc|inc)$", "", re.sub(r"[^a-z0-9]", "", str(company or "").lower()))
+    if co in JUNK_COMPANIES:
+        return True
+    if JUNK_TITLE_RE.search(title):
+        return True
+    parts = [x.strip() for x in title.split("|")]
+    return len(parts) >= 3 and sum(1 for x in parts if TITLE_TAG_RE.match(x)) >= 2
+
+
+# Companies based outside the US: foreign LinkedIn page (ng.linkedin.com, dk.linkedin.com...) or foreign head office
+FOREIGN_PAGE_RE = re.compile(r"^https?://([a-z]{2})\.linkedin\.com/", re.I)
+FOREIGN_HQ_RE = re.compile(r"\b(?:england|scotland|wales|united kingdom|london|canada|ontario|quebec|british columbia|"
+                           r"alberta|toronto|vancouver|india|pakistan|nigeria|lagos|philippines|australia|germany|"
+                           r"france|netherlands|spain|italy|ireland|denmark|copenhagen|sweden|norway|finland|poland|"
+                           r"portugal|switzerland|austria|belgium|israel|united arab emirates|dubai|singapore|"
+                           r"south africa|kenya|egypt|brazil|mexico|argentina|colombia|chile|peru|japan|china|"
+                           r"hong kong|korea|vietnam|indonesia|malaysia|new zealand|turkey|romania|ukraine|czech|"
+                           r"greece|hungary|bangladesh|sri lanka|saudi arabia|qatar|estonia|lithuania|latvia|"
+                           r"bulgaria|serbia|croatia|cyprus|malta|luxembourg)\b", re.I)
+
+
+def foreign_company(company_url):
+    url = str(company_url or "").split("?")[0].rstrip("/")
+    if FOREIGN_PAGE_RE.match(url):
+        return True
+    hq = COMPANY_HQ.get(url, "")
+    return bool(hq and FOREIGN_HQ_RE.search(hq) and not US_HQ_RE.search(hq))
+
+
+# Strong "we hire outside the US" signal (lets a plain "Manager" title through at 1-10 staff companies)
+MANAGER_SIGNAL_RE = re.compile(r"work from anywhere|anywhere in the world|worldwide|world-wide|international "
+                               r"(?:candidates|applicants|contractors|talent)|any time ?zone|all time ?zones|"
+                               r"offshore|overseas|\blatam\b|latin america|philippines", re.I)
+
+# Searches where any outsourceable role counts (only the hard no's apply)
+OPEN_CATEGORIES = {"Other Remote", "More Remote Roles", "Worldwide Hiring"}
+
 ONSITE_PHRASES = [
     "on-site", "onsite", "on site", "in office", "in-office", "in person",
     "in-person", "must be able to commute", "must reside within",
@@ -431,7 +505,9 @@ def is_emoji_char(ch):
 def clean_company(name):
     """Company name for messages: drops emojis and decorative symbols ("Citizen Agency 🐻" -> "Citizen Agency")."""
     out = "".join(ch for ch in str(name or "") if not is_emoji_char(ch))
-    return re.sub(r"\s{2,}", " ", out).strip() or str(name or "").strip()
+    out = re.sub(r"\s{2,}", " ", out).strip()
+    short = re.sub(r"(?:,?\s+(?:inc|llc|l\.l\.c|ltd|corp|corporation|pllc|llp|lp)\.?)+$", "", out, flags=re.I).strip()
+    return short or out or str(name or "").strip()
 
 
 def short_role(title):
@@ -446,7 +522,21 @@ def short_role(title):
     # "Remote Bookkeeper" -> "Bookkeeper" (work type is already its own column; reads better in messages)
     bare = re.sub(r"^(?:(?:remote|hybrid|part[- ]time|full[- ]time|freelance|contract|temporary|temp)\s+)+", "",
                   role, flags=re.I).strip()
-    return bare or role or clean
+    return full_role(bare or role or clean, clean)
+
+
+BARE_ROLE_RE = re.compile(r"^(?:(?:senior|sr\.?|junior|jr\.?)\s+)?(?:manager|specialist|coordinator|assistant|associate|"
+                          r"director|executive|consultant|analyst|administrator|officer|representative|designer|"
+                          r"developer|engineer|writer|editor|strategist|lead)$", re.I)
+
+
+def full_role(role, clean):
+    """A bare word like 'Manager' gets the rest of the title back: 'Manager, Paid Media' -> 'Paid Media Manager'."""
+    if not BARE_ROLE_RE.match(role) or not clean.lower().startswith(role.lower()):
+        return role
+    rest = re.sub(r"^[\s,:|\-\u2013\u2014]+", "", clean[len(role):])
+    rest = re.split(r"\s+[-|\u2013\u2014/]\s+|\s*[|(\[,:]", rest)[0].strip()
+    return f"{rest} {role}" if rest and len(rest) <= 40 else role
 
 
 def trim_role(role, limit=45):
@@ -595,7 +685,7 @@ def best_category(title, category):
         return category
     if category == "Remote Boards":
         return "CRM Automation"                  # remote boards only bring GHL / HubSpot / CRM jobs
-    if category == "Other Remote":
+    if category in OPEN_CATEGORIES:
         for cat, rx in ROLE_FIT_RE.items():
             if rx.search(title):
                 return cat
@@ -618,13 +708,35 @@ OTHER_BLOCK_RE = re.compile(r"\b(account executive|sales representative|sales re
                             r"founding)\b", re.I)
 
 
+def hard_no(title, desc=""):
+    """Roles we never pitch, whatever search found them: in-store, sales reps, interns, gigs, licensed, not a hire."""
+    return bool(NOT_REMOTE_TITLE_RE.search(title) or OTHER_BLOCK_RE.search(title) or NO_BUDGET_TITLE_RE.search(title)
+                or GIG_TITLE_RE.search(title) or HARD_LOCAL_TITLE_RE.search(title)
+                or NOT_A_HIRE_TITLE_RE.search(title) or NOT_A_HIRE_DESC_RE.search(desc))
+
+
+def title_category(title):
+    """Label for a job kept outside its own search: from the title, existing labels only ('Other' if none fits)."""
+    if re.search(r"\bcrm\b|hubspot|go\s?high\s?level|highlevel|\bghl\b", title, re.I):
+        return "CRM Automation"
+    for cat, rx in ROLE_FIT_RE.items():
+        if rx.search(title):
+            return cat
+    if re.search(r"automation|zapier|n8n|\bai\b|chatbot", title, re.I):
+        return "AI Automation"
+    return "Other"
+
+
+def manager_only(title):
+    """True when 'Manager' is the only senior word ('Operations Manager', not 'Senior Manager' or 'Director')."""
+    return bool(re.search(r"\bmanagers?\b", title, re.I)) and not is_senior(re.sub(r"\bmanagers?\b", " ", title,
+                                                                                   flags=re.I))
+
+
 def wrong_title(title, category, desc=""):
     """True for roles we should not pitch: in-store, off-target, no budget, gig listings, or not this category's work."""
-    if category == "Other Remote":
-        # any role is fine (IT, HR, data...), only the hard no's apply
-        return bool(NOT_REMOTE_TITLE_RE.search(title) or OTHER_BLOCK_RE.search(title) or NO_BUDGET_TITLE_RE.search(title)
-                    or GIG_TITLE_RE.search(title) or HARD_LOCAL_TITLE_RE.search(title)
-                    or NOT_A_HIRE_TITLE_RE.search(title) or NOT_A_HIRE_DESC_RE.search(desc))
+    if category in OPEN_CATEGORIES:
+        return hard_no(title, desc)        # any role is fine (IT, HR, data...), only the hard no's apply
     if NOT_REMOTE_TITLE_RE.search(title) or OFF_TARGET_TITLE_RE.search(title):
         return True
     if NO_BUDGET_TITLE_RE.search(title) or GIG_TITLE_RE.search(title):
@@ -1259,8 +1371,10 @@ def main():
 
             if cat_name == "Remote Boards":
                 terms = [("remote job boards", 0)]
-            for location, short in rcfg["locations"]:
-                passes = (True,) if cat_name == "Remote Boards" else (True, False)
+            extra_locs = cfg.get("extra_locations", [])
+            for location, short in list(rcfg["locations"]) + list(extra_locs):
+                extra_loc = (location, short) in extra_locs     # e.g. LinkedIn's "Worldwide" location
+                passes = (True,) if cat_name == "Remote Boards" or extra_loc else (True, False)
                 for term, n, remote_pass in [(t, k, rp) for t, k in terms for rp in passes]:
                     df = remote_boards() if cat_name == "Remote Boards" else \
                         search(term, n, location, remote_pass, cat_name)
@@ -1287,20 +1401,35 @@ def main():
 
                         flex = flexible_title(title, cat_name, desc)
                         crm_mgr = (is_senior(title) and crm_manager_title(title, cat_name)) or flex
-                        if is_senior(title) and not crm_mgr:
+                        # "Manager" (only) for any role: 1-10 staff and a strong worldwide hiring signal
+                        ww_mgr = bool(is_senior(title) and not crm_mgr and manager_only(title)
+                                      and MANAGER_SIGNAL_RE.search(desc))
+                        if is_senior(title) and not crm_mgr and not ww_mgr:
                             ex_senior.add(key)
                             skip_note(row, title, desc, company, cat_name, "Senior title", remote_pass)
                             continue
+                        on_linkedin = text(row.get("site")) in ("linkedin", "")
+                        widened = False          # kept although it is not this search's role (labelled by title)
                         if wrong_title(title, cat_name, desc) and not flex:
-                            ex_role.add(key)                             # in-store, off-target, intern, gig
-                            skip_note(row, title, desc, company, cat_name, "Role we don't pitch", remote_pass)
+                            if on_linkedin and cat_name not in OPEN_CATEGORIES and cat_name != "Remote Boards" \
+                                    and not hard_no(title, desc):
+                                widened = True
+                            else:
+                                ex_role.add(key)                         # in-store, sales rep, intern, gig, licensed
+                                skip_note(row, title, desc, company, cat_name, "Role we don't pitch", remote_pass)
+                                continue
+                        if junk_post(title, company):
+                            ex_role.add(key)
+                            skip_note(row, title, desc, company, cat_name, "Scam-style / junk post", remote_pass)
                             continue
                         if text(row.get("site")) not in ("linkedin", "") and not (CRM_TITLE_RE.search(title) or
                                                                        GHL_RE.search(title)):
                             ex_role.add(key)
                             continue                                     # other sites: GHL / CRM titles only
                         if regexes and not any(r.search(title + " " + desc) for r in regexes):
-                            continue
+                            if not on_linkedin or cat_name == "Remote Boards":
+                                continue
+                            widened = True
                         co_key = re.sub(r"\W+", "", company.lower())
                         if co_key in companies_today:
                             continue                                     # one row per company per day
@@ -1336,6 +1465,22 @@ def main():
                         if text(row.get("site")) in BOARD_SITES and not us_company(company_url):
                             ex_loc.add(key)                              # remote boards: US companies only
                             continue
+                        if foreign_company(company_url):
+                            ex_loc.add(key)                              # company based outside the US
+                            skip_note(row, title, desc, company, cat_name, "Company based outside the US",
+                                      remote_pass, size_label)
+                            continue
+                        if extra_loc and not us_company(company_url):
+                            ex_loc.add(key)                              # "Worldwide" search: US head office only
+                            skip_note(row, title, desc, company, cat_name, "Company not confirmed in the US",
+                                      remote_pass, size_label)
+                            continue
+                        if ww_mgr and (size_min is None or size_min > 10):
+                            ex_senior.add(key)                           # plain "Manager": 1-10 staff only
+                            skip_note(row, title, desc, company, cat_name,
+                                      "Manager title, company size unknown" if size_min is None else
+                                      f"Manager title at {size_label} staff", remote_pass, size_label)
+                            continue
                         if crm_mgr and (size_min is None or size_min > 50):
                             ex_senior.add(key)                           # Manager / Lead / Senior only at 1-50 staff
                             skip_note(row, title, desc, company, cat_name,
@@ -1359,13 +1504,14 @@ def main():
                             "posted": posted,
                             "priority": p_label,
                             "priority_rank": p_rank,
-                            "category": best_category(title, cat_name),
+                            "category": title_category(title) if widened else best_category(title, cat_name),
                             "region": short,
                             "region_rank": rcfg["rank"],
                             "title": title,
                             "role": role,
                             "skills": " · ".join(skills),
-                            "note": connection_note(company, role, cat_name, skills, wtype),
+                            "note": connection_note(company, role, title_category(title) if widened else cat_name,
+                                                    skills, wtype),
                             "company": company,
                             "size": size_label,
                             "work_type": wtype,
