@@ -42,7 +42,7 @@ REGIONS = {
 SITES = ["linkedin", "indeed", "zip_recruiter", "google"]   # same search on all four job sites
 SOURCE_LABELS = {"linkedin": "LinkedIn", "indeed": "Indeed", "zip_recruiter": "ZipRecruiter", "google": "Google Jobs",
                  "remotive": "Remotive", "remoteok": "Remote OK", "wwr": "We Work Remotely", "himalayas": "Himalayas",
-                 "jobicy": "Jobicy"}
+                 "jobicy": "Jobicy", "simplyhired": "SimplyHired", "bebee": "beBee"}
 
 GHL_TERMS = ["go high level", "highlevel", "high level crm", "ghl", "lead connector"]
 REAL_ESTATE_WORDS = ["real estate", "realty", "realtor", "properties", "homes", "property management"]
@@ -97,6 +97,12 @@ CATEGORIES = {
                      "QA Tester", "Software Developer", "Full Stack Developer", "Data Analyst",
                      "Operations Coordinator", "Technical Support", "Marketing Coordinator"],
         "must_mention": [],
+    },
+    "SimplyHired GHL": {
+        # Same as the manual search: "gohighlevel", Remote, last 7 days, sorted by relevance, every page.
+        # Any role, any company size, any country. Only the hard no's apply. Contacted on LinkedIn by hand.
+        "enabled": True, "deep_results": 0, "normal_results": 0, "regions": ["USA"],
+        "deep_searches": [], "searches": [], "must_mention": [],
     },
     "More Remote Roles": {
         # More roles that small US companies often hire remotely (only used to fill the day)
@@ -681,6 +687,8 @@ NOT_STAFFABLE_RE = re.compile(r"\b(analyst|reporter|journalist|technician)\b", r
 
 def best_category(title, category):
     """Category label from the job title (the search that found it can be a different one)."""
+    if re.search(r"\baccount managers?\b", title, re.I):
+        return "CRM Automation"            # only GoHighLevel posts reach here: client accounts in GHL
     if category in ("CRM Automation", "AI Automation"):
         return category
     if category == "Remote Boards":
@@ -708,16 +716,18 @@ OTHER_BLOCK_RE = re.compile(r"\b(account executive|sales representative|sales re
                             r"founding)\b", re.I)
 
 
-def hard_no(title, desc=""):
-    """Roles we never pitch, whatever search found them: in-store, sales reps, interns, gigs, licensed, not a hire."""
-    return bool(NOT_REMOTE_TITLE_RE.search(title) or OTHER_BLOCK_RE.search(title) or NO_BUDGET_TITLE_RE.search(title)
+def hard_no(title, desc="", ghl=False):
+    """Roles we never pitch, whatever search found them: in-store, sales reps, interns, gigs, licensed, not a hire.
+    ghl=True (the post names GoHighLevel): Account Manager is allowed (client accounts in GHL)."""
+    block_title = re.sub(r"\baccount managers?\b", " ", title, flags=re.I) if ghl else title
+    return bool(NOT_REMOTE_TITLE_RE.search(title) or OTHER_BLOCK_RE.search(block_title) or NO_BUDGET_TITLE_RE.search(title)
                 or GIG_TITLE_RE.search(title) or HARD_LOCAL_TITLE_RE.search(title)
                 or NOT_A_HIRE_TITLE_RE.search(title) or NOT_A_HIRE_DESC_RE.search(desc))
 
 
 def title_category(title):
     """Label for a job kept outside its own search: from the title, existing labels only ('Other' if none fits)."""
-    if re.search(r"\bcrm\b|hubspot|go\s?high\s?level|highlevel|\bghl\b", title, re.I):
+    if re.search(r"\bcrm\b|hubspot|go\s?high\s?level|highlevel|\bghl\b|\baccount managers?\b", title, re.I):
         return "CRM Automation"
     for cat, rx in ROLE_FIT_RE.items():
         if rx.search(title):
@@ -1213,6 +1223,141 @@ def skip_note(row, title, desc, company, cat_name, reason, remote_pass=False, si
     SKIPPED.append({"reason": reason, "title": title, "company": company, "url": text(row.get("job_url")),
                     "category": best_category(title, cat_name), "size": size or "",
                     "source": SOURCE_LABELS.get(text(row.get("site")) or "linkedin", "LinkedIn")})
+SH_DAYS = 7
+SH_STATS = {"pages": 0, "listed": 0, "too_old": 0, "post_read": 0, "post_unreadable": 0, "no_ghl": 0, "status": ""}
+
+
+def sh_next_data(html):
+    m = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', html or "", re.S)
+    try:
+        return json.loads(m.group(1)) if m else {}
+    except Exception:
+        return {}
+
+
+def sh_walk(obj, found, depth=0):
+    """Every (key, value) pair inside the page data, at any depth."""
+    if depth > 12:
+        return
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            found.append((str(k), v))
+            sh_walk(v, found, depth + 1)
+    elif isinstance(obj, list):
+        for v in obj:
+            sh_walk(v, found, depth + 1)
+
+
+def sh_date(value):
+    """SimplyHired dates come as text ('2026-11-01T...') or milliseconds: returns 'YYYY-MM-DD' or ''."""
+    try:
+        if isinstance(value, (int, float)) or str(value).isdigit():
+            return dt.datetime.fromtimestamp(int(value) / 1000, dt.timezone.utc).strftime("%Y-%m-%d")
+        m = re.match(r"(\d{4}-\d{2}-\d{2})", str(value or ""))
+        return m.group(1) if m else ""
+    except Exception:
+        return ""
+
+
+def sh_post(job_url):
+    """Full job post text from the SimplyHired job page ('' when the page can't be read)."""
+    try:
+        r = requests.get(job_url, headers=UA, timeout=30)
+        if r.status_code != 200:
+            return ""
+        texts = []
+        pairs = []
+        sh_walk(sh_next_data(r.text), pairs)
+        texts += [v for k, v in pairs if "description" in k.lower() and isinstance(v, str)]
+        for block in re.findall(r'<script[^>]*application/ld\+json[^>]*>(.*?)</script>', r.text, re.S):
+            try:
+                data = json.loads(block)
+            except Exception:
+                continue
+            for it in (data if isinstance(data, list) else [data]):
+                if isinstance(it, dict) and it.get("@type") == "JobPosting":
+                    texts.append(str(it.get("description") or ""))
+        best = max(texts, key=len) if texts else ""
+        best = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", best)).strip()
+        return best if len(best) >= 150 else ""
+    except Exception:
+        return ""
+    finally:
+        time.sleep(2)
+
+
+def simplyhired_ghl():
+    """Your manual SimplyHired search: 'gohighlevel', Remote, last 7 days, relevance, every page.
+    Keeps a job only when its full post names GoHighLevel (if the post can't be read, SimplyHired's own match is used)."""
+    import pandas as pd
+    from urllib.parse import quote
+    rows, seen, cursor = [], set(), ""
+    cutoff = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=SH_DAYS)).strftime("%Y-%m-%d")
+    for page in range(1, 16):                                   # at most 15 pages (about 300 jobs)
+        url = "https://www.simplyhired.com/search?q=gohighlevel&l=&wl=remote&t=" + str(SH_DAYS) + \
+              (f"&cursor={quote(cursor)}" if cursor else "")
+        try:
+            r = requests.get(url, headers=UA, timeout=30)
+        except Exception as e:
+            SH_STATS["status"] = f"failed ({e})"
+            break
+        if r.status_code != 200:
+            SH_STATS["status"] = f"blocked (page answer {r.status_code})"
+            break
+        props = sh_next_data(r.text).get("props", {}).get("pageProps", {})
+        jobs = props.get("jobs") or []
+        if not jobs:
+            if page == 1:
+                SH_STATS["status"] = "no jobs on the page (blocked or the page changed)"
+            break
+        SH_STATS["pages"] += 1
+        new_here = 0
+        for j in jobs:
+            key = str(j.get("jobKey") or "")
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            new_here += 1
+            SH_STATS["listed"] += 1
+            posted = sh_date(j.get("dateOnIndeed") or j.get("datePosted") or j.get("date"))
+            if posted and posted < cutoff:
+                SH_STATS["too_old"] += 1
+                continue
+            job_url = "https://www.simplyhired.com/job/" + key
+            title, company = str(j.get("title") or "").strip(), str(j.get("company") or "").strip()
+            if not title or not company:
+                continue
+            post = sh_post(job_url)
+            if post:
+                SH_STATS["post_read"] += 1
+                if not GHL_RE.search(title + " " + post):
+                    SH_STATS["no_ghl"] += 1
+                    continue
+            else:
+                SH_STATS["post_unreadable"] += 1
+            loc = str(j.get("location") or "Remote")
+            rows.append({"site": "simplyhired", "id": f"simplyhired:{job_url}", "job_url": job_url, "title": title,
+                         "company": company, "description": post or str(j.get("snippet") or ""),
+                         "location": loc if "remote" in loc.lower() else "Remote, " + loc,
+                         "date_posted": posted or dt.datetime.now(PKT).strftime("%Y-%m-%d"),
+                         "company_url": "", "company_url_direct": "", "is_remote": True,
+                         "company_industry": "", "company_num_employees": ""})
+        cursors = props.get("pageCursors") or {}
+        cursor = str(cursors.get(str(page + 1)) or cursors.get(page + 1) or "") if isinstance(cursors, dict) else ""
+        if not cursor or not new_here:
+            break
+        time.sleep(3)
+    SH_STATS["status"] = SH_STATS["status"] or "ok"
+    print(f"  SimplyHired | gohighlevel (remote, last {SH_DAYS} days): {SH_STATS}")
+    return pd.DataFrame(rows) if rows else None
+
+
+def linkedin_company_search(name):
+    """LinkedIn's company search for a name (used when the company page can't be found)."""
+    from urllib.parse import quote
+    return "https://www.linkedin.com/search/results/companies/?keywords=" + quote(str(name or ""))
+
+
 BOARD_SITES = {"remotive", "remoteok", "wwr", "himalayas", "jobicy"}
 CRM_BOARD_RE = re.compile(r"go\s?high\s?level|\bhighlevel\b|\bghl\b|hubspot|\bcrm (?:specialist|admin|"
                           r"administrator|automation|manager|consultant|developer)|lead\s?connector", re.I)
@@ -1371,12 +1516,15 @@ def main():
 
             if cat_name == "Remote Boards":
                 terms = [("remote job boards", 0)]
+            sh_cat = cat_name == "SimplyHired GHL"
+            if sh_cat:
+                terms = [("gohighlevel", 0)]
             extra_locs = cfg.get("extra_locations", [])
             for location, short in list(rcfg["locations"]) + list(extra_locs):
                 extra_loc = (location, short) in extra_locs     # e.g. LinkedIn's "Worldwide" location
-                passes = (True,) if cat_name == "Remote Boards" or extra_loc else (True, False)
+                passes = (True,) if cat_name == "Remote Boards" or extra_loc or sh_cat else (True, False)
                 for term, n, remote_pass in [(t, k, rp) for t, k in terms for rp in passes]:
-                    df = remote_boards() if cat_name == "Remote Boards" else \
+                    df = remote_boards() if cat_name == "Remote Boards" else simplyhired_ghl() if sh_cat else \
                         search(term, n, location, remote_pass, cat_name)
                     if remote_pass and df is not None and len(df):
                         REMOTE_FILTER_IDS.update(job_id_of(r) for _, r in df.iterrows())
@@ -1404,13 +1552,17 @@ def main():
                         # "Manager" (only) for any role: 1-10 staff and a strong worldwide hiring signal
                         ww_mgr = bool(is_senior(title) and not crm_mgr and manager_only(title)
                                       and MANAGER_SIGNAL_RE.search(desc))
-                        if is_senior(title) and not crm_mgr and not ww_mgr:
+                        # A job that names GoHighLevel: any title (on LinkedIn the 1-50 staff limit still applies)
+                        ghl_any = bool(sh_cat or GHL_RE.search(title + " " + desc))
+                        if ghl_any and is_senior(title) and not crm_mgr and not sh_cat:
+                            crm_mgr = True                               # size checked below (1-50 staff)
+                        if is_senior(title) and not crm_mgr and not ww_mgr and not sh_cat:
                             ex_senior.add(key)
                             skip_note(row, title, desc, company, cat_name, "Senior title", remote_pass)
                             continue
                         on_linkedin = text(row.get("site")) in ("linkedin", "")
                         widened = False          # kept although it is not this search's role (labelled by title)
-                        if wrong_title(title, cat_name, desc) and not flex:
+                        if (hard_no(title, desc, ghl=True) if ghl_any else wrong_title(title, cat_name, desc)) and not flex:
                             if on_linkedin and cat_name not in OPEN_CATEGORIES and cat_name != "Remote Boards" \
                                     and not hard_no(title, desc):
                                 widened = True
@@ -1422,8 +1574,8 @@ def main():
                             ex_role.add(key)
                             skip_note(row, title, desc, company, cat_name, "Scam-style / junk post", remote_pass)
                             continue
-                        if text(row.get("site")) not in ("linkedin", "") and not (CRM_TITLE_RE.search(title) or
-                                                                       GHL_RE.search(title)):
+                        if text(row.get("site")) not in ("linkedin", "") and not sh_cat and \
+                                not (CRM_TITLE_RE.search(title) or GHL_RE.search(title)):
                             ex_role.add(key)
                             continue                                     # other sites: GHL / CRM titles only
                         if regexes and not any(r.search(title + " " + desc) for r in regexes):
@@ -1446,7 +1598,7 @@ def main():
                             skip_note(row, title, desc, company, cat_name, "Agency / recruiter / job board", remote_pass)
                             continue
                         company_url = text(row.get("company_url")).split("?")[0]
-                        if text(row.get("site")) in BOARD_SITES:
+                        if text(row.get("site")) in BOARD_SITES or sh_cat:
                             for cand in linkedin_company_guesses(company):   # find the company's LinkedIn page
                                 company_size(cand, row)
                                 if COMPANY_HQ.get(cand):
@@ -1457,7 +1609,9 @@ def main():
                         if is_agency(company, industry, desc, title):
                             ex_agency.add(key)
                             continue                                     # website shows a staffing firm
-                        if size_min is not None and size_min > MAX_EMPLOYEES:
+                        if sh_cat and not COMPANY_HQ.get(company_url.split("?")[0].rstrip("/")):
+                            company_url = linkedin_company_search(company)   # page not found: LinkedIn search link
+                        if size_min is not None and size_min > MAX_EMPLOYEES and not sh_cat:
                             ex_big.add(key)
                             skip_note(row, title, desc, company, cat_name, f"More than 50 staff ({size_label})",
                                       remote_pass, size_label)
@@ -1465,7 +1619,7 @@ def main():
                         if text(row.get("site")) in BOARD_SITES and not us_company(company_url):
                             ex_loc.add(key)                              # remote boards: US companies only
                             continue
-                        if foreign_company(company_url):
+                        if foreign_company(company_url) and not sh_cat:
                             ex_loc.add(key)                              # company based outside the US
                             skip_note(row, title, desc, company, cat_name, "Company based outside the US",
                                       remote_pass, size_label)
@@ -1475,13 +1629,13 @@ def main():
                             skip_note(row, title, desc, company, cat_name, "Company not confirmed in the US",
                                       remote_pass, size_label)
                             continue
-                        if ww_mgr and (size_min is None or size_min > 10):
+                        if ww_mgr and not sh_cat and (size_min is None or size_min > 10):
                             ex_senior.add(key)                           # plain "Manager": 1-10 staff only
                             skip_note(row, title, desc, company, cat_name,
                                       "Manager title, company size unknown" if size_min is None else
                                       f"Manager title at {size_label} staff", remote_pass, size_label)
                             continue
-                        if crm_mgr and (size_min is None or size_min > 50):
+                        if crm_mgr and not sh_cat and (size_min is None or size_min > 50):
                             ex_senior.add(key)                           # Manager / Lead / Senior only at 1-50 staff
                             skip_note(row, title, desc, company, cat_name,
                                       "Senior title, company size unknown" if size_min is None else
@@ -1504,13 +1658,13 @@ def main():
                             "posted": posted,
                             "priority": p_label,
                             "priority_rank": p_rank,
-                            "category": title_category(title) if widened else best_category(title, cat_name),
+                            "category": title_category(title) if (widened or sh_cat) else best_category(title, cat_name),
                             "region": short,
                             "region_rank": rcfg["rank"],
                             "title": title,
                             "role": role,
                             "skills": " · ".join(skills),
-                            "note": connection_note(company, role, title_category(title) if widened else cat_name,
+                            "note": connection_note(company, role, title_category(title) if (widened or sh_cat) else cat_name,
                                                     skills, wtype),
                             "company": company,
                             "size": size_label,
