@@ -142,6 +142,30 @@ def onsite_ask(l):
     return l.get("work_type") in ("On-site", "Hybrid") and l.get("size_min") is not None and l["size_min"] <= 10
 
 
+def skip_reason(l):
+    """Why a remote lead is not pitched (for the daily Skipped tab)."""
+    if not l.get("direct", True):
+        return "Agency / recruiter"
+    if is_nonprofit(l):
+        return "Nonprofit / school / association"
+    size_min = l.get("size_min")
+    if size_min is not None and size_min > MAX_COMPANY_SIZE:
+        return f"More than 50 staff ({l.get('size')})"
+    if size_min is None and not ("GHL" in str(l.get("priority") or "") or l.get("worldwide") or l.get("tiny_clue")):
+        return "Company size unknown (no small-business signal)"
+    return "Not eligible"
+
+
+SKIPPED = []
+
+
+def note_skip(l, reason):
+    if l.get("work_type") == "Remote" and len(SKIPPED) < 200:
+        SKIPPED.append({"reason": reason, "title": l.get("title", ""), "company": l.get("company", ""),
+                        "url": l.get("url", ""), "category": l.get("category", ""), "size": l.get("size", ""),
+                        "source": l.get("source", "LinkedIn")})
+
+
 def eligible(l):
     if l.get("work_type") not in OUTREACH_WORK_TYPES and not onsite_ask(l):
         return False                       # office jobs only at 1-10 staff companies (asked about remote)
@@ -1024,6 +1048,9 @@ def main():
         per_co.setdefault(norm(l.get("company")), set()).add(l.get("title"))
     GROWING.update(k for k, v in per_co.items() if len(v) >= 2)
     leads = [l for l in all_leads if eligible(l)]
+    for l in all_leads:
+        if not eligible(l):
+            note_skip(l, skip_reason(l))
     try:
         BLOCKED_DOMAINS.update(json.loads(post({"action": "blocked_domains"})).get("domains", []))
     except Exception:
@@ -1047,6 +1074,9 @@ def main():
         print("Could not check earlier outreach, continuing:", reply[:200])
         new_keys = set(check)
     fresh_ranked = [l for l in ranked if co_key(l["company"]) in new_keys and norm(l["company"]) in new_keys]
+    for l in ranked:
+        if not (co_key(l["company"]) in new_keys and norm(l["company"]) in new_keys):
+            note_skip(l, "Already contacted before")
     # ----- Upwork first: it gets the Apify budget before LinkedIn founders -----
     up = upwork_leads(today, 0)
     upwork_spent = 0.01 + 0.003 * UPWORK_STATS["checked"] if UPWORK_ENABLED and APIFY_TOKEN else 0
@@ -1061,11 +1091,14 @@ def main():
     cap = email_cap(today) if EMAIL_ENABLED else 0
     rows, linkedin_n, emailed, found_n, looked = [], 0, 0, 0, 0
     unknown_n = 0
-    for l in fresh_ranked:
+    for i, l in enumerate(fresh_ranked):
         if len(rows) >= DAILY_TOTAL:
+            for rest in fresh_ranked[i:]:
+                note_skip(rest, "Over today's 50 (kept for reference)")
             break
         if l.get("size_min") is None:
             if unknown_n >= UNKNOWN_SIZE_MAX:
+                note_skip(l, "Unknown-size limit (10 a day) reached")
                 continue
             unknown_n += 1
         email, kind = "", ""
@@ -1177,7 +1210,7 @@ def main():
     rows = up_rows + rows
     for i, r in enumerate(rows):
         r["rank"] = i + 1
-    print("Sheet response:", post({"action": "outreach_add", "rows": rows,
+    print("Sheet response:", post({"action": "outreach_add", "rows": rows, "skipped": SKIPPED,
                                    "eligible": len(ranked), "found": len(found),
                                    "emails": emailed,
                                    "upwork": f'{UPWORK_STATS["checked"]} checked · {UPWORK_STATS.get("no_name", 0)} no name · '
