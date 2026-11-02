@@ -14,6 +14,7 @@ You only ever edit the SETTINGS section.
 """
 import datetime as dt
 import json
+import random
 import unicodedata
 import os
 import re
@@ -36,7 +37,7 @@ MAX_EMPLOYEES = 50      # founder-led small companies only (unknown size is kept
 # rank = order in your sheet. scale = fewer results per search for smaller markets.
 # Each location: (LinkedIn search location, short name shown in sheet)
 REGIONS = {
-    "USA": {"enabled": True, "rank": 1, "scale": 1.8, "locations": [("United States", "USA")]},   # deeper search
+    "USA": {"enabled": True, "rank": 1, "scale": 1.0, "locations": [("United States", "USA")]},   # normal depth (deeper got us rate-limited)
 }
 SITES = ["linkedin", "indeed", "zip_recruiter", "google"]   # same search on all four job sites
 SOURCE_LABELS = {"linkedin": "LinkedIn", "indeed": "Indeed", "zip_recruiter": "ZipRecruiter", "google": "Google Jobs",
@@ -639,6 +640,25 @@ def wrong_title(title, category, desc=""):
     return not (any(r.search(title) for r in ROLE_FIT_RE.values()) or ANY_FIT_RE.search(title))
 
 
+PRIORITY_TITLE_RE = re.compile(r"go\s?high\s?level|highlevel|\bghl\b|\bcrm\b|hubspot|sales development|\bsdr\b|\bbdr\b|"
+                               r"business development rep|\bseo\b|search engine|performance market|paid (?:media|search|"
+                               r"social|ads)|\bppc\b|media buyer|google ads|meta ads|facebook ads|wordpress|graphic|"
+                               r"content creator|content designer|visual designer|executive assistant|virtual assistant|"
+                               r"personal assistant", re.I)
+FLEX_WORDS_RE = re.compile(r"\b(?:senior|sr\.?|lead|manager|strategist)\b", re.I)
+
+
+def flexible_title(title, category, desc=""):
+    """Priority roles: 'SEO Manager', 'Senior Media Buyer', 'SEO Strategist' are hands-on at small companies.
+    True when the title only fails because of those words (checked later: company must have 1-50 staff)."""
+    if not (PRIORITY_TITLE_RE.search(title) or category == "CRM Automation") or not FLEX_WORDS_RE.search(title):
+        return False
+    plain = re.sub(r"\s{2,}", " ", FLEX_WORDS_RE.sub(" ", title)).strip(" ,-|/")
+    if not plain:
+        return False
+    return not is_senior(plain) and not wrong_title(plain, category, desc)
+
+
 def crm_manager_title(title, category):
     """'CRM Manager' / 'Marketing Automation Manager': hands-on at small companies, allowed up to 50 staff."""
     if category != "CRM Automation" or not CRM_TITLE_RE.search(title):
@@ -987,6 +1007,9 @@ def search(term, n, location, remote=False, cat_name=""):
             if site == "google":
                 kw["google_search_term"] = f"{term} {'remote ' if remote else ''}jobs in United States since yesterday"
             df = scrape_jobs(**kw)
+            if site == "linkedin" and (df is None or len(df) == 0):
+                time.sleep(random.uniform(60, 90))      # LinkedIn often answers 0 when it is busy: wait, try once more
+                df = scrape_jobs(**kw)
             if df is not None and len(df):
                 df = df.copy()
                 df["site"] = site
@@ -995,7 +1018,7 @@ def search(term, n, location, remote=False, cat_name=""):
         except Exception as e:
             print(f"  {site} | {term}: failed ({e})")
         finally:
-            time.sleep(3)
+            time.sleep(random.uniform(8, 15) if site == "linkedin" else 3)   # look like normal traffic to LinkedIn
     if cat_name == "CRM Automation" and not remote:
         extra = ghl_extra_sites(term)
         if extra is not None:
@@ -1062,6 +1085,22 @@ def ghl_extra_sites(term):
 
 
 REMOTE_FILTER_IDS = set()
+SKIPPED = []                     # remote jobs we dropped, with the reason (shown in the daily Skipped tab)
+
+
+def skip_note(row, title, desc, company, cat_name, reason, remote_pass=False, size=""):
+    """Keeps a remote job we are dropping, so you can see (and rescue) it in the Skipped tab."""
+    if len(SKIPPED) >= 150 or any(x["url"] == text(row.get("job_url")) for x in SKIPPED):
+        return
+    try:
+        hit = remote_pass or job_id_of(row) in REMOTE_FILTER_IDS
+        if decide_work(row, title, desc, "", hit) != "Remote":
+            return
+    except Exception:
+        return
+    SKIPPED.append({"reason": reason, "title": title, "company": company, "url": text(row.get("job_url")),
+                    "category": best_category(title, cat_name), "size": size or "",
+                    "source": SOURCE_LABELS.get(text(row.get("site")) or "linkedin", "LinkedIn")})
 BOARD_SITES = {"remotive", "remoteok", "wwr", "himalayas", "jobicy"}
 CRM_BOARD_RE = re.compile(r"go\s?high\s?level|\bhighlevel\b|\bghl\b|hubspot|\bcrm (?:specialist|admin|"
                           r"administrator|automation|manager|consultant|developer)|lead\s?connector", re.I)
@@ -1246,12 +1285,15 @@ def main():
                         desc = text(row.get("description"))
                         industry = text(row.get("company_industry"))
 
-                        crm_mgr = is_senior(title) and crm_manager_title(title, cat_name)
+                        flex = flexible_title(title, cat_name, desc)
+                        crm_mgr = (is_senior(title) and crm_manager_title(title, cat_name)) or flex
                         if is_senior(title) and not crm_mgr:
                             ex_senior.add(key)
+                            skip_note(row, title, desc, company, cat_name, "Senior title", remote_pass)
                             continue
-                        if wrong_title(title, cat_name, desc):
+                        if wrong_title(title, cat_name, desc) and not flex:
                             ex_role.add(key)                             # in-store, off-target, intern, gig
+                            skip_note(row, title, desc, company, cat_name, "Role we don't pitch", remote_pass)
                             continue
                         if text(row.get("site")) not in ("linkedin", "") and not (CRM_TITLE_RE.search(title) or
                                                                        GHL_RE.search(title)):
@@ -1267,9 +1309,12 @@ def main():
                             continue
                         if location_locked(title, text(row.get("location")), desc) or HARD_LOCAL_RE.search(desc):
                             ex_loc.add(key)                              # must live in the US, W-2, licensed...
+                            skip_note(row, title, desc, company, cat_name, "Must live in the US / W-2 / licensed",
+                                      remote_pass)
                             continue
                         if is_agency(company, industry, desc, title):
                             ex_agency.add(key)
+                            skip_note(row, title, desc, company, cat_name, "Agency / recruiter / job board", remote_pass)
                             continue
                         company_url = text(row.get("company_url")).split("?")[0]
                         if text(row.get("site")) in BOARD_SITES:
@@ -1285,19 +1330,24 @@ def main():
                             continue                                     # website shows a staffing firm
                         if size_min is not None and size_min > MAX_EMPLOYEES:
                             ex_big.add(key)
+                            skip_note(row, title, desc, company, cat_name, f"More than 50 staff ({size_label})",
+                                      remote_pass, size_label)
                             continue
                         if text(row.get("site")) in BOARD_SITES and not us_company(company_url):
                             ex_loc.add(key)                              # remote boards: US companies only
                             continue
                         if crm_mgr and (size_min is None or size_min > 50):
-                            ex_senior.add(key)                           # CRM managers only at small companies
+                            ex_senior.add(key)                           # Manager / Lead / Senior only at 1-50 staff
+                            skip_note(row, title, desc, company, cat_name,
+                                      "Senior title, company size unknown" if size_min is None else
+                                      f"Senior title at {size_label} staff", remote_pass, size_label)
                             continue
 
                         p_label, p_rank = priority(title, desc, company, industry)
                         skills = key_skills(title, desc)
                         role = short_role(title)
                         # Work type: LinkedIn's own tags first, clear wording second
-                        page_tag = page_workplace(job_id_of(row)) if text(row.get("site")) == "linkedin" else ""
+                        page_tag = ""      # LinkedIn hides the tag from automated checks (it only cost requests)
                         wt_checked.add(key)
                         if page_tag:
                             wt_confirmed.add(key)
@@ -1361,7 +1411,8 @@ def main():
               "excluded_incomplete": len(ex_incomplete), "excluded_location": len(ex_loc),
               "skipped_senior": len(ex_senior), "skipped_role": len(ex_role),
               "wt_confirmed": len(wt_confirmed), "wt_checked": len(wt_checked),
-              "wt_remote": sum(1 for l in leads if l.get("work_type") == "Remote")}
+              "wt_remote": sum(1 for l in leads if l.get("work_type") == "Remote"),
+              "skipped": SKIPPED}
     # The 14 searches finish close together and the Sheet saves them one at a time: retry if it was busy
     # (safe: the Sheet never adds the same lead twice)
     r = None
