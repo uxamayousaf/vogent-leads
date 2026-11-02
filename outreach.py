@@ -166,7 +166,19 @@ def note_skip(l, reason):
                         "source": l.get("source", "LinkedIn")})
 
 
+def is_simplyhired(l):
+    return str(l.get("site") or "") == "simplyhired"
+
+
 def eligible(l):
+    if is_simplyhired(l):                  # GoHighLevel leads: no size, country or unknown-size limits
+        comp, title = str(l.get("company", "")).lower(), str(l.get("title", "")).lower()
+        return bool(l.get("work_type") in OUTREACH_WORK_TYPES and l.get("direct", True)
+                    and not any(w in comp for w in NOT_EMPLOYER_NAME_WORDS)
+                    and not any(w in title for w in NOT_EMPLOYER_TITLE_WORDS)
+                    and not is_nonprofit(l)
+                    and norm(l.get("company")) not in ("confidential", "confidentialcompany", "stealth", "stealthstartup")
+                    and all(str(l.get(k) or "").strip() for k in ("company", "title", "url")))
     if l.get("work_type") not in OUTREACH_WORK_TYPES and not onsite_ask(l):
         return False                       # office jobs only at 1-10 staff companies (asked about remote)
     if l.get("region") not in REGION_ORDER:
@@ -239,6 +251,8 @@ ROLE_PRIORITY = [
 
 def role_tier(l):
     t, c = str(l.get("title") or ""), str(l.get("category") or "")
+    if "GHL" in str(l.get("priority") or ""):
+        return 0                                       # the post names GoHighLevel: top, whatever the title
     for i, (_, test) in enumerate(ROLE_PRIORITY):
         if test(t, c):
             return i
@@ -1077,8 +1091,8 @@ def main():
     except Exception:
         pass
     best_per_company = {}
-    for l in sorted(leads, key=rank_key):
-        best_per_company.setdefault(co_key(l["company"]), l)     # one row per company, best job
+    for l in sorted(leads, key=lambda x: (0 if is_simplyhired(x) else 1, rank_key(x))):
+        best_per_company.setdefault(co_key(l["company"]), l)     # one row per company (SimplyHired job first)
     ranked = sorted(best_per_company.values(), key=rank_key)
     print(f"Eligible direct-hire companies today: {len(ranked)}")
     if not ranked:
@@ -1104,7 +1118,27 @@ def main():
 
     # A company found on Upwork and on a job site gets one row only (the Upwork row, at the top)
     up_keys = {co_key(u["company"]) for u in (up or [])}
-    fresh_ranked = [l for l in fresh_ranked if co_key(l["company"]) not in up_keys]
+    fresh_ranked = [l for l in fresh_ranked if co_key(l["company"]) not in up_keys or is_simplyhired(l)]
+
+    # SimplyHired GoHighLevel leads: all of them, on top of the 50, contacted on LinkedIn (no emails for now)
+    sh_leads = [l for l in fresh_ranked if is_simplyhired(l)]
+    fresh_ranked = [l for l in fresh_ranked if not is_simplyhired(l)]
+    sh_rows = []
+    for l in sh_leads:
+        p = free_founder(l["company"], l.get("people"))
+        first = p["first"] if p else ""
+        note, li = named_note(l.get("note", ""), first), linkedin_messages(l, first)
+        sh_rows.append({
+            "key": co_key(l["company"]), "date": today.strftime("%Y-%m-%d"), "rank": 0,
+            "region": l["region"], "company": l["company"], "company_url": l.get("company_url", ""),
+            "size": l.get("size", "Unknown"), "job_url": l["url"], "title": l["title"],
+            "work_type": l.get("work_type", ""), "category": l.get("category", ""), "source": "SimplyHired",
+            "dm_name": p["name"] if p else "Find founder ↗",
+            "dm_url": p["url"] if p else founder_search_url(l["company"], l.get("company_url", "")),
+            "dm_title": p["title"] if p else "",
+            "channel": "LinkedIn", "email": "", "note": note, "followup": li[0], "messages": [note] + li,
+            "email_status": ""})
+    print(f"SimplyHired GoHighLevel rows: {len(sh_rows)}")
 
     # ----- Best leads first, up to 50 a day -----
     # Each company, best first: confirmed size + good email found -> Email (until the sender's daily limit),
@@ -1196,7 +1230,7 @@ def main():
             new_up = set(json.loads(reply).get("new", []))
         except Exception:
             new_up = {norm(u["company"]) for u in up}
-        queued_keys = {r["key"] for r in rows}
+        queued_keys = {r["key"] for r in rows + sh_rows}
         fresh_up = [u for u in up if norm(u["company"]) in new_up and norm(u["company"]) not in queued_keys]
         UPWORK_STATS["new"] = len(fresh_up)
         for u in fresh_up:
@@ -1227,8 +1261,8 @@ def main():
                 "recontact_days": UPWORK_RECONTACT_DAYS,
             })
 
-    # Upwork GoHighLevel leads always at the top of the tab
-    rows = up_rows + rows
+    # SimplyHired GoHighLevel leads first, then Upwork, then LinkedIn and the rest
+    rows = sh_rows + up_rows + rows
     for i, r in enumerate(rows):
         r["rank"] = i + 1
     print("Sheet response:", post({"action": "outreach_add", "rows": rows, "skipped": SKIPPED,
