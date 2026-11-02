@@ -222,7 +222,9 @@ def size_tier(l):
 
 # Roles that are easiest to staff, in this order. Others only fill the day if these are not enough.
 ROLE_PRIORITY = [
-    ("GHL / CRM", lambda t, c: c == "CRM Automation"),
+    ("GHL / CRM", lambda t, c: c == "CRM Automation" and bool(re.search(
+        r"\bcrm\b|hubspot|go\s?high\s?level|highlevel|high level|\bghl\b|lead\s?connector|funnel|"
+        r"marketing automation", t, re.I))),
     ("SDR", lambda t, c: bool(re.search(r"sales development|\bsdr\b|\bbdr\b|business development rep", t, re.I))),
     ("SEO", lambda t, c: bool(re.search(r"\bseo\b|search engine", t, re.I))),
     ("Performance Marketer", lambda t, c: bool(re.search(r"performance market|paid (?:media|search|social|ads)|"
@@ -724,9 +726,27 @@ def fix_case(name):
 
 
 def clean_company(name):
-    """Company name for messages: drops emojis and decorative symbols (same as find_leads.py)."""
+    """Company name for messages: drops emojis, decorative symbols and Inc / LLC (same as find_leads.py)."""
     out = "".join(ch for ch in str(name or "") if not is_emoji_char(ch))
-    return re.sub(r"\s{2,}", " ", out).strip() or str(name or "").strip()
+    out = re.sub(r"\s{2,}", " ", out).strip()
+    short = re.sub(r"(?:,?\s+(?:inc|llc|l\.l\.c|ltd|corp|corporation|pllc|llp|lp)\.?)+$", "", out, flags=re.I).strip()
+    return short or out or str(name or "").strip()
+
+
+BARE_ROLE_RE = re.compile(r"^(?:(?:senior|sr\.?|junior|jr\.?)\s+)?(?:manager|specialist|coordinator|assistant|associate|"
+                          r"director|executive|consultant|analyst|administrator|officer|representative|designer|"
+                          r"developer|engineer|writer|editor|strategist|lead)$", re.I)
+
+
+def full_role(role, title):
+    """A bare word like 'Manager' gets the rest of the title back: 'Manager, Paid Media' -> 'Paid Media Manager'."""
+    clean = re.sub(r"^[^\w]+", "", str(title or ""))
+    clean = re.sub(r"^(?:remote|hybrid|on-?site)\s*[|:\-\u2013\u2014]\s*", "", clean, flags=re.I)
+    if not role or not BARE_ROLE_RE.match(role) or not clean.lower().startswith(role.lower()):
+        return role
+    rest = re.sub(r"^[\s,:|\-\u2013\u2014]+", "", clean[len(role):])
+    rest = re.split(r"\s+[-|\u2013\u2014/]\s+|\s*[|(\[,:]", rest)[0].strip()
+    return f"{rest} {role}" if rest and len(rest) <= 40 else role
 
 
 def msg_role(lead):
@@ -736,6 +756,7 @@ def msg_role(lead):
     role = re.sub(r"virtual assistant", "assistant", lead.get("role") or "", flags=re.I).strip()
     role = re.sub(r"^(?:(?:remote|hybrid|part[- ]time|full[- ]time|freelance|contract|temporary|temp)\s+)+", "",
                   role, flags=re.I).strip() or role          # also cleans leads found before this change
+    role = full_role(role, lead.get("title"))                # "Manager" -> "Paid Media & Acquisition Manager"
     if len(role) > 45:                                       # never end on "and", "of", "&" ...
         words = role[:45].rsplit(" ", 1)[0].split(" ")
         while len(words) > 1 and words[-1].lower() in ("and", "or", "&", "of", "for", "with", "to", "the", "a", "an", "in"):
