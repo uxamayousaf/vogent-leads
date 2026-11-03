@@ -137,6 +137,9 @@ def load_candidates():
     return leads
 
 
+ONSITE_OUTREACH = False   # on-site / hybrid jobs at 2-10 staff are no longer queued (they stay on the Leads tab)
+
+
 def onsite_ask(l):
     """On-site / hybrid job at a company with 1 to 10 staff: worth asking if they would hire remotely."""
     return l.get("work_type") in ("On-site", "Hybrid") and l.get("size_min") is not None and l["size_min"] <= 10
@@ -179,7 +182,7 @@ def eligible(l):
                     and not is_nonprofit(l)
                     and norm(l.get("company")) not in ("confidential", "confidentialcompany", "stealth", "stealthstartup")
                     and all(str(l.get(k) or "").strip() for k in ("company", "title", "url")))
-    if l.get("work_type") not in OUTREACH_WORK_TYPES and not onsite_ask(l):
+    if l.get("work_type") not in OUTREACH_WORK_TYPES and not (ONSITE_OUTREACH and onsite_ask(l)):
         return False                       # office jobs only at 1-10 staff companies (asked about remote)
     if l.get("region") not in REGION_ORDER:
         return False
@@ -465,8 +468,15 @@ NOT_A_COMPANY_RE = re.compile(r"account[- ]based|looker|google|microsoft|hubspot
                               r"apple|canva|slack|openai|chatgpt|claude", re.I)
 
 
-def client_name(desc):
-    """Only returns a name the job post itself states, and only if it looks like a real company name."""
+NOT_A_NAME_START = {"build", "building", "create", "develop", "design", "launch", "manage", "grow", "scale", "run",
+                    "help", "head", "director", "chief", "vp", "setup", "set", "hire", "hiring", "need", "join", "path",
+                    "become", "drive", "generate", "implement", "optimize", "own", "lead", "senior", "looking"}
+
+
+def client_name(desc, title=""):
+    """Only returns a name the job post itself states, and only if it looks like a real company name.
+    Never a heading that starts with a verb or job word ('Build AI-Powered ... Systems', 'Head of Marketing')
+    and never words taken from the job title."""
     pats = [
         r"(?im)^\s*company\s*:\s*([A-Z][^\n]{1,50})$",
         r"(?m)^\s*About\s+([A-Z][\w&'.-]*(?:\s+[A-Z&][\w&'.-]*){0,4})\s*$",
@@ -480,6 +490,8 @@ def client_name(desc):
             name = re.sub(r"\s+", " ", m.group(1)).strip(" .,:")
             first = name.split(" ")[0].lower()
             if first in NOT_A_NAME or len(name) < 3 or name.lower() in NOT_A_NAME or NOT_A_COMPANY_RE.search(name):
+                continue
+            if first in NOT_A_NAME_START or (title and name.lower() in str(title).lower()):
                 continue
             tokens = [t.lower().strip("'’&.,") for t in re.split(r"[\s-]+", name)]
             if tokens and tokens[0] in GENERIC_WORDS:
@@ -591,7 +603,7 @@ def upwork_leads(today, start_rank):
         if not verified:
             drop["not_verified"] += 1
             continue                     # payment method verified (new clients with $0 spent are fine)
-        name, website = client_name(desc), ""
+        name, website = client_name(desc, it.get("title") or ""), ""
         if not name:
             name, website = client_from_domain(desc)       # website or email domain in the post
         title = str(it.get("title") or "")
@@ -765,9 +777,10 @@ def full_role(role, title):
 
 def msg_role(lead):
     """Short role used in every message. Virtual Assistant roles are never called VA."""
-    if lead.get("category") == "Virtual Assistant":
+    # The real job title; only "Virtual Assistant" / "VA" titles become "assistant" (never VA in outreach copy)
+    if re.search(r"virtual assistant|\bva\b", str(lead.get("role") or lead.get("title") or ""), re.I):
         return "assistant"
-    role = re.sub(r"virtual assistant", "assistant", lead.get("role") or "", flags=re.I).strip()
+    role = str(lead.get("role") or "").strip()
     role = re.sub(r"^(?:(?:remote|hybrid|part[- ]time|full[- ]time|freelance|contract|temporary|temp)\s+)+", "",
                   role, flags=re.I).strip() or role          # also cleans leads found before this change
     role = full_role(role, lead.get("title"))                # "Manager" -> "Paid Media & Acquisition Manager"
