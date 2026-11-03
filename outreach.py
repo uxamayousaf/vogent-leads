@@ -19,7 +19,7 @@ from urllib.parse import quote
 import requests
 
 # ============================ SETTINGS ============================
-DAILY_TOTAL = 50                         # quality leads per day (email + LinkedIn); Upwork GHL rows come on top
+DAILY_TOTAL = 0                          # 0 = no daily limit: every eligible lead is queued (emails still 22 a day)
 MAX_COMPANY_SIZE = 50                    # founder-led companies: 1 to 50 staff (unknown size ranked last)
 SMALL_COMPANY = 50
 WEEKDAYS_ONLY = True                     # Monday to Friday (Pakistan time)
@@ -1129,11 +1129,11 @@ def main():
     up = upwork_leads(today, 0)
     upwork_spent = 0.01 + 0.003 * UPWORK_STATS["checked"] if UPWORK_ENABLED and APIFY_TOKEN else 0
 
-    # A company found on Upwork and on a job site gets one row only (the Upwork row, at the top)
+    # A company found on Upwork and on SimplyHired or LinkedIn gets one row only (the Upwork row, at the top)
     up_keys = {co_key(u["company"]) for u in (up or [])}
-    fresh_ranked = [l for l in fresh_ranked if co_key(l["company"]) not in up_keys or is_simplyhired(l)]
+    fresh_ranked = [l for l in fresh_ranked if co_key(l["company"]) not in up_keys]
 
-    # SimplyHired GoHighLevel leads: all of them, on top of the 50, contacted on LinkedIn (no emails for now)
+    # SimplyHired GoHighLevel leads: all of them, contacted on LinkedIn (no emails for now)
     sh_leads = [l for l in fresh_ranked if is_simplyhired(l)]
     fresh_ranked = [l for l in fresh_ranked if not is_simplyhired(l)]
     sh_rows = []
@@ -1153,16 +1153,16 @@ def main():
             "email_status": ""})
     print(f"SimplyHired GoHighLevel rows: {len(sh_rows)}")
 
-    # ----- Best leads first, up to 50 a day -----
+    # ----- Best leads first (no daily limit) -----
     # Each company, best first: confirmed size + good email found -> Email (until the sender's daily limit),
     # otherwise -> LinkedIn. The channel never decides who gets in: the ranking does.
     cap = email_cap(today) if EMAIL_ENABLED else 0
     rows, linkedin_n, emailed, found_n, looked = [], 0, 0, 0, 0
     unknown_n = 0
     for i, l in enumerate(fresh_ranked):
-        if len(rows) >= DAILY_TOTAL:
+        if DAILY_TOTAL and len(rows) >= DAILY_TOTAL:
             for rest in fresh_ranked[i:]:
-                note_skip(rest, "Over today's 50 (kept for reference)")
+                note_skip(rest, f"Over today's {DAILY_TOTAL} (kept for reference)")
             break
         if l.get("size_min") is None:
             if unknown_n >= UNKNOWN_SIZE_MAX:
@@ -1275,7 +1275,7 @@ def main():
             })
 
     # SimplyHired GoHighLevel leads first, then Upwork, then LinkedIn and the rest
-    rows = sh_rows + up_rows + rows
+    rows = up_rows + sh_rows + rows                      # Upwork (GHL), SimplyHired (GHL), then LinkedIn
     for i, r in enumerate(rows):
         r["rank"] = i + 1
     print("Sheet response:", post({"action": "outreach_add", "rows": rows, "skipped": SKIPPED,
