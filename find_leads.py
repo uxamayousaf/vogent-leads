@@ -39,7 +39,7 @@ MAX_EMPLOYEES = 50      # founder-led small companies only (unknown size is kept
 REGIONS = {
     "USA": {"enabled": True, "rank": 1, "scale": 1.0, "locations": [("United States", "USA")]},   # normal depth (deeper got us rate-limited)
 }
-SITES = ["linkedin", "indeed", "zip_recruiter", "google"]   # same search on all four job sites
+SITES = ["linkedin"]          # LinkedIn only (Indeed, ZipRecruiter and Google Jobs switched off)
 SOURCE_LABELS = {"linkedin": "LinkedIn", "indeed": "Indeed", "zip_recruiter": "ZipRecruiter", "google": "Google Jobs",
                  "remotive": "Remotive", "remoteok": "Remote OK", "wwr": "We Work Remotely", "himalayas": "Himalayas",
                  "jobicy": "Jobicy", "simplyhired": "SimplyHired", "bebee": "beBee"}
@@ -85,8 +85,8 @@ CATEGORIES = {
         ],
     },
     "Remote Boards": {
-        # Remote-first job boards (every job is remote); the role label comes from the job title
-        "enabled": True, "deep_results": 0, "normal_results": 0, "regions": ["USA"],
+        # Remote-first job boards (switched off: never produced a lead)
+        "enabled": False, "deep_results": 0, "normal_results": 0, "regions": ["USA"],
         "deep_searches": [], "searches": [], "must_mention": [],
     },
     "Other Remote": {
@@ -1169,10 +1169,7 @@ def search(term, n, location, remote=False, cat_name=""):
             print(f"  {site} | {term}: failed ({e})")
         finally:
             time.sleep(random.uniform(8, 15) if site == "linkedin" else 3)   # look like normal traffic to LinkedIn
-    if cat_name == "CRM Automation" and not remote:
-        extra = ghl_extra_sites(term)
-        if extra is not None:
-            frames.append(extra)
+    # beBee and the direct SimplyHired page reader are switched off (SimplyHired now comes through Apify)
     if not frames:
         return None
     import pandas as pd
