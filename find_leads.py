@@ -351,6 +351,7 @@ _PLACES = (r"(?:US|U\.S\.?|USA|U\.S\.A\.?|United States|UK|U\.K\.?|United Kingdo
            r"Australia|New Zealand|UAE|Singapore|Ireland|Netherlands|France|Spain|Switzerland|"
            r"Saudi Arabia|Qatar|Malaysia|Hong Kong|South Africa|North America|EST|PST|CST)")
 LOCATION_LOCK_PATTERNS = [
+    re.compile(r"\b(?:strictly\s+)?americans?\s+(?:candidates?|applicants?|citizens?|residents?)\s+only\b", re.I),
     re.compile(r"\b[Mm]ust\s+(?:be\s+)?(?:currently\s+)?(?:located|based|residing|reside|live|living)\s+(?:in|within)\s+(?:the\s+)?[A-Z]"),
     re.compile(r"\b" + _PLACES + r"[\s-]*(?:based\s+)?(?:residents?|citizens?|candidates?|applicants?|persons?)\s+only\b", re.I),
     re.compile(r"\b(?:only|exclusively)\s+(?:open\s+to|accepting|considering|hiring)\s+(?:candidates|applicants|people|those|individuals)"
@@ -528,7 +529,33 @@ def short_role(title):
     # "Remote Bookkeeper" -> "Bookkeeper" (work type is already its own column; reads better in messages)
     bare = re.sub(r"^(?:(?:remote|hybrid|part[- ]time|full[- ]time|freelance|contract|temporary|temp)\s+)+", "",
                   role, flags=re.I).strip()
-    return full_role(bare or role or clean, clean)
+    return tidy_role(full_role(bare or role or clean, clean), clean)
+
+
+KEEP_UPPER = {"SEO", "SDR", "BDR", "CRM", "GHL", "AI", "UI", "UX", "PPC", "HR", "IT", "QA", "CMS", "SMS", "B2B",
+              "B2C", "SaaS", "CEO", "COO", "CFO", "CTO", "CPA", "API", "AR", "AP", "US", "USA", "LLC", "GTM", "PR"}
+
+
+def tidy_role(role, clean):
+    """'TechnologyOne/TechOne' (no role word) -> 'Property & Rating Specialist'; 'REELS/CLIPS/EDITOR' -> 'Reels/Clips/Editor'."""
+    role = str(role or "").strip().rstrip(".")
+    if role and not ROLE_NOUN.search(role):
+        # "SEO (Search Engine Optimization) Specialist" -> "SEO Specialist"
+        no_brackets = re.sub(r"\s+", " ", re.sub(r"\s*\([^)]*\)", " ", clean)).strip()
+        first = re.split(r"\s+[-|\u2013\u2014]\s+|\s*\||\[|,|:", no_brackets)[0].strip().rstrip(".")
+        if ROLE_NOUN.search(first) and len(first) <= 45:
+            role = first
+    if role and not ROLE_NOUN.search(role):
+        for part in re.split(r"\s+[-|\u2013\u2014]\s+|\s*\||\(|\[|,|:", clean):
+            part = part.strip().rstrip(".")
+            if ROLE_NOUN.search(part) and len(part) <= 45:
+                role = re.sub(r"\b(" + ROLE_NOUN.pattern[5:-5] + r")s\b", r"\1", part, flags=re.I) \
+                    if re.search(r"s\b$", part) else part
+                break
+    letters = [c for c in role if c.isalpha()]
+    if len(letters) > 4 and all(c.isupper() for c in letters):
+        role = re.sub(r"[A-Za-z]+", lambda m: m.group(0) if m.group(0) in KEEP_UPPER else m.group(0).capitalize(), role)
+    return role
 
 
 BARE_ROLE_RE = re.compile(r"^(?:(?:senior|sr\.?|junior|jr\.?)\s+)?(?:manager|specialist|coordinator|assistant|associate|"
@@ -956,8 +983,9 @@ NOTE_LIMIT = 300   # LinkedIn Premium allows 300 characters in a connection note
 def connection_note(company, role, category, skills, work):
     """Universal connection request for every role (same wording for all categories).
     Starts with "Hi," so outreach.py can add the person's first name once it is known."""
-    if category == "Virtual Assistant":
-        role = "assistant"           # keep "VA" wording out of outreach copy
+    # The real job title; only "Virtual Assistant" / "VA" titles become "assistant" (never VA in outreach copy)
+    if re.search(r"virtual assistant|\bva\b", role, re.I):
+        role = "assistant"
     role = trim_role(role)
     first_word = role.split(" ")[0] if role else ""
     if first_word.isupper() and len(first_word) > 1:          # acronyms: "an SEO", "a CRM"
@@ -1224,28 +1252,11 @@ def skip_note(row, title, desc, company, cat_name, reason, remote_pass=False, si
                     "category": best_category(title, cat_name), "size": size or "",
                     "source": SOURCE_LABELS.get(text(row.get("site")) or "linkedin", "LinkedIn")})
 SH_DAYS = 7
-SH_STATS = {"pages": 0, "listed": 0, "too_old": 0, "post_read": 0, "post_unreadable": 0, "no_ghl": 0, "status": ""}
-
-
-def sh_next_data(html):
-    m = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', html or "", re.S)
-    try:
-        return json.loads(m.group(1)) if m else {}
-    except Exception:
-        return {}
-
-
-def sh_walk(obj, found, depth=0):
-    """Every (key, value) pair inside the page data, at any depth."""
-    if depth > 12:
-        return
-    if isinstance(obj, dict):
-        for k, v in obj.items():
-            found.append((str(k), v))
-            sh_walk(v, found, depth + 1)
-    elif isinstance(obj, list):
-        for v in obj:
-            sh_walk(v, found, depth + 1)
+SH_ACTOR = "abotapi~simplyhired-com-scraper"     # Apify scraper (SimplyHired blocks direct visits from GitHub)
+SH_BUDGET_USD = 0.10                             # SimplyHired's own daily Apify limit (Upwork keeps its $0.30)
+SH_MAX_LISTINGS = 200
+APIFY_TOKEN = os.environ.get("APIFY_TOKEN", "").strip()
+SH_STATS = {"listed": 0, "too_old": 0, "not_remote": 0, "sponsored": 0, "status": ""}
 
 
 def sh_date(value):
@@ -1259,96 +1270,70 @@ def sh_date(value):
         return ""
 
 
-def sh_post(job_url):
-    """Full job post text from the SimplyHired job page ('' when the page can't be read)."""
-    try:
-        r = requests.get(job_url, headers=UA, timeout=30)
-        if r.status_code != 200:
-            return ""
-        texts = []
-        pairs = []
-        sh_walk(sh_next_data(r.text), pairs)
-        texts += [v for k, v in pairs if "description" in k.lower() and isinstance(v, str)]
-        for block in re.findall(r'<script[^>]*application/ld\+json[^>]*>(.*?)</script>', r.text, re.S):
-            try:
-                data = json.loads(block)
-            except Exception:
-                continue
-            for it in (data if isinstance(data, list) else [data]):
-                if isinstance(it, dict) and it.get("@type") == "JobPosting":
-                    texts.append(str(it.get("description") or ""))
-        best = max(texts, key=len) if texts else ""
-        best = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", best)).strip()
-        return best if len(best) >= 150 else ""
-    except Exception:
-        return ""
-    finally:
-        time.sleep(2)
+def apify_items(actor, body, cost_cap):
+    """Runs an Apify scraper (never above cost_cap dollars) and returns its results."""
+    base = "https://api.apify.com/v2"
+    run = requests.post(f"{base}/acts/{actor}/runs",
+                        params={"token": APIFY_TOKEN, "maxTotalChargeUsd": round(cost_cap, 2)},
+                        json=body, timeout=60).json()["data"]
+    status = ""
+    for _ in range(60):                                   # wait up to ~10 minutes
+        time.sleep(10)
+        status = requests.get(f"{base}/actor-runs/{run['id']}", params={"token": APIFY_TOKEN},
+                              timeout=30).json()["data"]["status"]
+        if status in ("SUCCEEDED", "FAILED", "ABORTED", "TIMED-OUT"):
+            break
+    items = requests.get(f"{base}/datasets/{run['defaultDatasetId']}/items",
+                         params={"token": APIFY_TOKEN, "clean": "true"}, timeout=60).json()
+    return status, (items if isinstance(items, list) else [])
 
 
 def simplyhired_ghl():
-    """Your manual SimplyHired search: 'gohighlevel', Remote, last 7 days, relevance, every page.
-    Keeps a job only when its full post names GoHighLevel (if the post can't be read, SimplyHired's own match is used)."""
+    """Your manual SimplyHired search through Apify: 'gohighlevel', Remote only, last 7 days, sorted by relevance,
+    USA site. Uses SimplyHired's own keyword match (job pages are not opened, which keeps the cost low)."""
     import pandas as pd
-    from urllib.parse import quote
-    rows, seen, cursor = [], set(), ""
+    if not APIFY_TOKEN:
+        SH_STATS["status"] = "no Apify key (APIFY_TOKEN missing in GitHub secrets)"
+        print(f"  SimplyHired | gohighlevel: {SH_STATS}")
+        return None
+    body = {"mode": "search", "queries": ["gohighlevel"], "location": "Remote", "country": "us",
+            "jobType": "any", "datePosted": str(SH_DAYS), "remoteOnly": True, "sortBy": "relevance",
+            "skipSponsored": False, "maxListings": SH_MAX_LISTINGS, "fetchDetails": False,
+            "proxy": {"useApifyProxy": True, "apifyProxyGroups": ["RESIDENTIAL"], "apifyProxyCountry": "US"}}
+    try:
+        status, items = apify_items(SH_ACTOR, body, SH_BUDGET_USD)
+    except Exception as e:
+        SH_STATS["status"] = f"Apify failed ({e})"
+        print(f"  SimplyHired | gohighlevel: {SH_STATS}")
+        return None
     cutoff = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=SH_DAYS)).strftime("%Y-%m-%d")
-    for page in range(1, 16):                                   # at most 15 pages (about 300 jobs)
-        url = "https://www.simplyhired.com/search?q=gohighlevel&l=&wl=remote&t=" + str(SH_DAYS) + \
-              (f"&cursor={quote(cursor)}" if cursor else "")
-        try:
-            r = requests.get(url, headers=UA, timeout=30)
-        except Exception as e:
-            SH_STATS["status"] = f"failed ({e})"
-            break
-        if r.status_code != 200:
-            SH_STATS["status"] = f"blocked (page answer {r.status_code})"
-            break
-        props = sh_next_data(r.text).get("props", {}).get("pageProps", {})
-        jobs = props.get("jobs") or []
-        if not jobs:
-            if page == 1:
-                SH_STATS["status"] = "no jobs on the page (blocked or the page changed)"
-            break
-        SH_STATS["pages"] += 1
-        new_here = 0
-        for j in jobs:
-            key = str(j.get("jobKey") or "")
-            if not key or key in seen:
-                continue
-            seen.add(key)
-            new_here += 1
-            SH_STATS["listed"] += 1
-            posted = sh_date(j.get("dateOnIndeed") or j.get("datePosted") or j.get("date"))
-            if posted and posted < cutoff:
-                SH_STATS["too_old"] += 1
-                continue
-            job_url = "https://www.simplyhired.com/job/" + key
-            title, company = str(j.get("title") or "").strip(), str(j.get("company") or "").strip()
-            if not title or not company:
-                continue
-            post = sh_post(job_url)
-            if post:
-                SH_STATS["post_read"] += 1
-                if not GHL_RE.search(title + " " + post):
-                    SH_STATS["no_ghl"] += 1
-                    continue
-            else:
-                SH_STATS["post_unreadable"] += 1
-            loc = str(j.get("location") or "Remote")
-            rows.append({"site": "simplyhired", "id": f"simplyhired:{job_url}", "job_url": job_url, "title": title,
-                         "company": company, "description": post or str(j.get("snippet") or ""),
-                         "location": loc if "remote" in loc.lower() else "Remote, " + loc,
-                         "date_posted": posted or dt.datetime.now(PKT).strftime("%Y-%m-%d"),
-                         "company_url": "", "company_url_direct": "", "is_remote": True,
-                         "company_industry": "", "company_num_employees": ""})
-        cursors = props.get("pageCursors") or {}
-        cursor = str(cursors.get(str(page + 1)) or cursors.get(page + 1) or "") if isinstance(cursors, dict) else ""
-        if not cursor or not new_here:
-            break
-        time.sleep(3)
-    SH_STATS["status"] = SH_STATS["status"] or "ok"
-    print(f"  SimplyHired | gohighlevel (remote, last {SH_DAYS} days): {SH_STATS}")
+    rows, seen = [], set()
+    for j in items:
+        key = str(j.get("id") or j.get("jobKey") or "")
+        title, company = str(j.get("title") or "").strip(), str(j.get("company") or "").strip()
+        if not key or key in seen or not title or not company:
+            continue
+        seen.add(key)
+        SH_STATS["listed"] += 1
+        posted = sh_date(j.get("datePosted") or j.get("dateOnIndeed"))
+        if posted and posted < cutoff:
+            SH_STATS["too_old"] += 1
+            continue
+        tags = " ".join(str(x) for x in (j.get("workSettings") or []) + (j.get("remoteAttributes") or []))
+        loc = str(j.get("location") or j.get("formattedLocation") or "")
+        if not re.search(r"remote", tags + " " + loc, re.I):
+            SH_STATS["not_remote"] += 1                    # remote only (same as the Remote tick box)
+            continue
+        job_url = str(j.get("url") or "https://www.simplyhired.com/job/" + key)
+        rows.append({"site": "simplyhired", "id": f"simplyhired:{job_url}", "job_url": job_url, "title": title,
+                     "company": company, "description": str(j.get("descriptionText") or j.get("snippet") or ""),
+                     "location": "Remote" if not loc or "remote" in loc.lower() else "Remote, " + loc,
+                     "date_posted": posted or dt.datetime.now(PKT).strftime("%Y-%m-%d"),
+                     "company_url": "", "company_url_direct": str(j.get("employerHomepage") or ""),
+                     "is_remote": True, "company_industry": "", "company_num_employees": ""})
+    SH_STATS["status"] = "ok" if status == "SUCCEEDED" else f"Apify run {status or 'unknown'}"
+    print(f"  SimplyHired | gohighlevel (Remote only, last {SH_DAYS} days, relevance, USA): "
+          f"{len(rows)} jobs kept | {SH_STATS}")
     return pd.DataFrame(rows) if rows else None
 
 
