@@ -30,6 +30,7 @@ jobs:
           REGION: ${{ matrix.region }}
           SHEET_WEBAPP_URL: ${{ secrets.SHEET_WEBAPP_URL }}
           SHEET_TOKEN: ${{ secrets.SHEET_TOKEN }}
+          APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}      # used only by the SimplyHired search
       - uses: actions/upload-artifact@v4
         with:
           name: candidates-${{ strategy.job-index }}
