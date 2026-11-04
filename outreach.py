@@ -220,7 +220,8 @@ def is_nonprofit(l):
     """Nonprofits and public bodies rarely buy offshore staffing: ranked lower, never removed."""
     site = str(l.get("website") or "").lower()
     return bool(NONPROFIT_IND.search(str(l.get("industry") or "")) or NONPROFIT_NAME.search(str(l.get("company") or ""))
-                or re.search(r"\.org(?:\.[a-z]{2})?(?:/|$)", site))
+                or re.search(r"\.org(?:\.[a-z]{2})?(?:/|$)", site)
+                or "linkedin.com/school/" in str(l.get("company_url") or "").lower())
 
 
 def size_tier(l):
@@ -468,9 +469,32 @@ NOT_A_COMPANY_RE = re.compile(r"account[- ]based|looker|google|microsoft|hubspot
                               r"apple|canva|slack|openai|chatgpt|claude", re.I)
 
 
+# Software tools a job post mentions ("we use Reply.io") are never the client
+TOOL_NAMES = {"reply", "instantly", "apollo", "smartlead", "lemlist", "clay", "outreach", "salesloft", "pipedrive",
+              "zoho", "keap", "clickfunnels", "kajabi", "activecampaign", "mailchimp", "klaviyo", "twilio", "calendly",
+              "airtable", "clickup", "asana", "trello", "intercom", "gong", "vapi", "retell", "bland", "n8n", "lindy",
+              "close", "woodpecker", "lemlist", "seamless", "zoominfo", "phantombuster", "expandi", "dripify",
+              "waalaxy", "heyreach", "manychat", "systeme", "stripe", "quickbooks", "xero", "gusto", "jobber",
+              "servicetitan", "housecall pro", "podium", "birdeye", "yext", "semrush", "ahrefs", "webflow", "wix",
+              "squarespace", "figma", "loom", "zoom", "gmail", "outlook", "chatgpt", "gemini", "perplexity"}
+# Industry words: a "name" made only of these is a description ("Residential Construction & Remodeling")
+INDUSTRY_WORDS = set("""residential commercial construction remodeling remodel renovation roofing plumbing hvac
+electrical landscaping cleaning janitorial insurance financial finance health healthcare wellness dental legal law
+realty property properties mortgage home homes ecommerce e-commerce software tech technology design web creative
+coaching education travel restaurant fitness beauty salon spa auto automotive logistics transportation
+manufacturing dealership medspa med clinic practice chiropractic therapy physical solar energy pest control
+moving storage painting flooring kitchen bath remodelers builders building contractors contracting""".split())
+
+
 NOT_A_NAME_START = {"build", "building", "create", "develop", "design", "launch", "manage", "grow", "scale", "run",
                     "help", "head", "director", "chief", "vp", "setup", "set", "hire", "hiring", "need", "join", "path",
                     "become", "drive", "generate", "implement", "optimize", "own", "lead", "senior", "looking"}
+
+
+def upwork_job_key(url):
+    """One key per Upwork job (the ~0123... id in its link)."""
+    m = re.search(r"~(\w+)", str(url or ""))
+    return "upjob" + (m.group(1).lower() if m else norm(url))
 
 
 def client_name(desc, title=""):
@@ -493,6 +517,11 @@ def client_name(desc, title=""):
                 continue
             if first in NOT_A_NAME_START or (title and name.lower() in str(title).lower()):
                 continue
+            if re.sub(r"\.(?:io|com|ai|co|app)$", "", name.lower()).strip() in TOOL_NAMES:
+                continue                                   # a software tool the post mentions
+            words_only = [t.lower().strip("'’&.,") for t in re.split(r"[\s-]+", name) if t.strip("&")]
+            if words_only and all(t in INDUSTRY_WORDS or t in GENERIC_WORDS for t in words_only):
+                continue                                   # a business type, not a name
             tokens = [t.lower().strip("'’&.,") for t in re.split(r"[\s-]+", name)]
             if tokens and tokens[0] in GENERIC_WORDS:
                 continue                                   # "What We Value We", "Our Team" ...
@@ -784,12 +813,34 @@ def msg_role(lead):
     role = re.sub(r"^(?:(?:remote|hybrid|part[- ]time|full[- ]time|freelance|contract|temporary|temp)\s+)+", "",
                   role, flags=re.I).strip() or role          # also cleans leads found before this change
     role = full_role(role, lead.get("title"))                # "Manager" -> "Paid Media & Acquisition Manager"
-    if len(role) > 45:                                       # never end on "and", "of", "&" ...
-        words = role[:45].rsplit(" ", 1)[0].split(" ")
-        while len(words) > 1 and words[-1].lower() in ("and", "or", "&", "of", "for", "with", "to", "the", "a", "an", "in"):
-            words.pop()
-        role = " ".join(words)
+    role = keep_role_end(role, 45)                            # keeps "Representative", never ends on "and"
     return role or "open"
+
+
+def keep_role_end(role, limit=45):
+    """Too long: drop words from the START so the role word stays ('Automotive Business Development
+    Representative' -> 'Business Development Representative'); otherwise cut at a word break."""
+    if len(role) <= limit:
+        return role
+    words = role.split(" ")
+    if ROLE_END_RE.search(role):
+        while len(words) > 1 and len(" ".join(words)) > limit:
+            words.pop(0)
+        while len(words) > 1 and words[0].lower() in ("and", "or", "&", "of", "for", "with", "to", "the", "a", "an", "in"):
+            words.pop(0)
+        out = " ".join(words)
+        if len(out) <= limit and ROLE_END_RE.search(out):
+            return out
+    words = role[:limit].rsplit(" ", 1)[0].split(" ")
+    while len(words) > 1 and words[-1].lower() in ("and", "or", "&", "of", "for", "with", "to", "the", "a", "an", "in"):
+        words.pop()
+    return " ".join(words)
+
+
+ROLE_END_RE = re.compile(r"(?:specialist|manager|coordinator|assistant|associate|representative|executive|designer|"
+                         r"developer|engineer|writer|editor|strategist|analyst|consultant|administrator|officer|"
+                         r"setter|buyer|lead|director|accountant|bookkeeper|marketer|agent)s?$", re.I)
+
 
 
 # Skills used in messages (the Leads tab keeps the full list as found):
@@ -1122,6 +1173,7 @@ def main():
         print("Could not check earlier outreach, continuing:", reply[:200])
         new_keys = set(check)
     fresh_ranked = [l for l in ranked if co_key(l["company"]) in new_keys and norm(l["company"]) in new_keys]
+    contacted_before = len(ranked) - len(fresh_ranked)          # for the daily summary
     for l in ranked:
         if not (co_key(l["company"]) in new_keys and norm(l["company"]) in new_keys):
             note_skip(l, "Already contacted before")
@@ -1237,14 +1289,16 @@ def main():
     # ----- Upwork GHL leads with a named client (searched at the start) -----
     up_rows = []
     if up:
-        reply = post({"action": "outreach_check", "companies": [norm(u["company"]) for u in up],
+        reply = post({"action": "outreach_check",
+                      "companies": [norm(u["company"]) for u in up] + [upwork_job_key(u["url"]) for u in up],
                       "recontact_days": UPWORK_RECONTACT_DAYS})
         try:
             new_up = set(json.loads(reply).get("new", []))
         except Exception:
-            new_up = {norm(u["company"]) for u in up}
+            new_up = {norm(u["company"]) for u in up} | {upwork_job_key(u["url"]) for u in up}
         queued_keys = {r["key"] for r in rows + sh_rows}
-        fresh_up = [u for u in up if norm(u["company"]) in new_up and norm(u["company"]) not in queued_keys]
+        fresh_up = [u for u in up if norm(u["company"]) in new_up and upwork_job_key(u["url"]) in new_up
+                    and norm(u["company"]) not in queued_keys]
         UPWORK_STATS["new"] = len(fresh_up)
         for u in fresh_up:
             p = free_founder(u["company"])
@@ -1272,6 +1326,7 @@ def main():
                 "messages": up_msgs,                    # note, DM, follow-up 1, follow-up 2 (same as LinkedIn)
                 "email_status": "",
                 "recontact_days": UPWORK_RECONTACT_DAYS,
+                "job_key": upwork_job_key(u["url"]),     # the same Upwork job is never pitched twice
             })
 
     # SimplyHired GoHighLevel leads first, then Upwork, then LinkedIn and the rest
@@ -1279,7 +1334,7 @@ def main():
     for i, r in enumerate(rows):
         r["rank"] = i + 1
     print("Sheet response:", post({"action": "outreach_add", "rows": rows, "skipped": SKIPPED,
-                                   "eligible": len(ranked), "found": len(found),
+                                   "eligible": len(ranked), "found": len(found), "contacted": contacted_before,
                                    "emails": emailed,
                                    "upwork": f'{UPWORK_STATS["checked"]} checked · {UPWORK_STATS.get("no_name", 0)} no name · '
                                              f'{UPWORK_STATS.get("not_verified", 0)} unverified · '
