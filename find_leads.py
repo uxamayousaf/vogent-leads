@@ -414,7 +414,7 @@ HARD_LOCAL_TITLE_RE = re.compile(r"american accent|\bw-?2\b|\benterprise\b|\breg
                                  r"\blpn\b|\bcna\b|\bcrna\b|\bemt\b", re.I)
 # Scam-style or junk posts (home-based travel booking, "No Experience Needed", event recruiting ads)
 JUNK_COMPANIES = {"dreamscape", "premierdestinationgroup", "torentify"}
-JUNK_TITLE_RE = re.compile(r"no experience (?:needed|required|necessary)|let[\u2019']?s (?:connect|meet) at|meet us at|"
+JUNK_TITLE_RE = re.compile(r"no experience (?:needed|required|necessary)|management trainee|let[\u2019']?s (?:connect|meet) at|meet us at|"
                            r"visit (?:us|our booth) at|career fair|job fair|hiring event|travel bookings?\b|"
                            r"data entry[^|]*(?:work from home|\bwfh\b)", re.I)
 TITLE_TAG_RE = re.compile(r"^(?:100%\s*|fully\s+)?(?:remote|online|virtual|work from home|wfh)(?:\s*\(.*\))?$|"
@@ -572,14 +572,34 @@ def full_role(role, clean):
     return f"{rest} {role}" if rest and len(rest) <= 40 else role
 
 
-def trim_role(role, limit=45):
-    """Shortens a very long role at a word break and never ends on 'and', 'of', '&' and similar."""
+def keep_role_end(role, limit=45):
+    """Too long: drop words from the START so the role word stays ('Automotive Business Development
+    Representative' -> 'Business Development Representative'); otherwise cut at a word break."""
     if len(role) <= limit:
         return role
+    words = role.split(" ")
+    if ROLE_END_RE.search(role):
+        while len(words) > 1 and len(" ".join(words)) > limit:
+            words.pop(0)
+        while len(words) > 1 and words[0].lower() in ("and", "or", "&", "of", "for", "with", "to", "the", "a", "an", "in"):
+            words.pop(0)
+        out = " ".join(words)
+        if len(out) <= limit and ROLE_END_RE.search(out):
+            return out
     words = role[:limit].rsplit(" ", 1)[0].split(" ")
     while len(words) > 1 and words[-1].lower() in ("and", "or", "&", "of", "for", "with", "to", "the", "a", "an", "in"):
         words.pop()
     return " ".join(words)
+
+
+ROLE_END_RE = re.compile(r"(?:specialist|manager|coordinator|assistant|associate|representative|executive|designer|"
+                         r"developer|engineer|writer|editor|strategist|analyst|consultant|administrator|officer|"
+                         r"setter|buyer|lead|director|accountant|bookkeeper|marketer|agent)s?$", re.I)
+
+
+def trim_role(role, limit=45):
+    """Shortens a very long role and keeps the role word at the end."""
+    return keep_role_end(role, limit)
 
 
 def evidence(desc, regexes):
@@ -613,7 +633,9 @@ def is_agency(company, industry, desc, title=""):
     if re.search(r"\bhire(?:d)?\b|hired|recruit|talent|staffing|\bjobs?\b|careers?\b", re.sub(r"(?<=[a-z])(?=[A-Z])", " ", company), re.I) \
             or re.search(r"staffing|recruit", WEBSITE_OF.get(company, ""), re.I):
         return True                              # hiring / recruiting platforms ("HiredBuddy", "TalentHub")
-    if "staffing" in ind or "recruit" in ind:
+    if "staffing" in ind or "recruit" in ind or "human resources services" in ind:
+        return True
+    if re.search(r"recruit(?:ing|ment) network|executive search firm|staffing firm|placement firm|npaworldwide", c + " " + d):
         return True
     if any(re.search(r"\b" + re.escape(b) + r"\b", c) for b in AGENCY_BLOCKLIST):
         return True
@@ -740,7 +762,8 @@ def best_category(title, category):
 
 
 OTHER_BLOCK_RE = re.compile(r"\b(account executive|sales representative|sales rep|account manager|controller|"
-                            r"founding)\b", re.I)
+                            r"founding|business development executive|"
+                            r"(?:hardware|field|repair|bench|maintenance|lab|service|installation) technician)\b", re.I)
 
 
 def hard_no(title, desc="", ghl=False):
