@@ -37,7 +37,7 @@ APIFY_MAX_PEOPLE = 40                    # most people looked up in one pass
 # Job boards, job aggregators and "entry level, commission" style posts are never contacted
 NOT_EMPLOYER_NAME_WORDS = ["careers", "jobs", "job board", "jobboard", "hiring", "hunter", "recruit",
                            "staffing", "talent", "wiraa", "remotehunter", "jobot", "dice", "ziprecruiter",
-                           "abilitylinks", "linkedin", "indeed", "glassdoor", "upwork", "fiverr",
+                           "abilitylinks", "linkedin", "indeed", "glassdoor", "upwork", "fiverr", "shyftoff",
                            "jobgether", "town of", "city of", "county", "government", "ministry",
                            "municipality", "university", "school district", "college", "authority",
                            "department", "district", "state of", "commonwealth", "public schools"]
@@ -95,7 +95,7 @@ APIFY_TOKEN = os.environ.get("APIFY_TOKEN", "").strip()
 PKT = dt.timezone(dt.timedelta(hours=5))
 WORK_ORDER = {"Remote": 0, "Not confirmed": 1, "Remote (check)": 1, "Remote (mentioned)": 1, "Not stated": 2, "Hybrid": 3, "On-site": 4}
 OUTREACH_WORK_TYPES = ["Remote"]   # only jobs LinkedIn itself shows as Remote (never On-site, Hybrid or unconfirmed)
-EMAIL_DAILY = 22                         # new emails per day (USA first, then Canada, then UK).
+EMAIL_DAILY = 30                         # new emails per day (USA first, then Canada, then UK).
                                          # 22 new + 3 follow-ups each = about 80 sends a day, under the 95 cap
 TITLE_RANK = ["founder", "co-founder", "ceo", "chief executive", "owner", "president",
               "managing director", "principal", "partner", "coo", "general manager"]
@@ -213,7 +213,7 @@ NONPROFIT_IND = re.compile(r"non-?profit|philanthrop|civic|social organization|g
 NONPROFIT_NAME = re.compile(r"\b(foundation|council|association|society|charity|charitable|institute|"
                             r"federation|ministries|church|alliance|credit union|university|college|school|board|"
                             r"asu)\b", re.I)
-UNKNOWN_SIZE_MAX = 10                    # unknown-size companies per day, and only with a strong signal
+UNKNOWN_SIZE_MAX = 20                    # unknown-size companies per day, and only with a strong signal
 
 
 def is_nonprofit(l):
@@ -255,8 +255,8 @@ ROLE_PRIORITY = [
 
 def role_tier(l):
     t, c = str(l.get("title") or ""), str(l.get("category") or "")
-    if "GHL" in str(l.get("priority") or ""):
-        return 0                                       # the post names GoHighLevel: top, whatever the title
+    if re.search(r"GHL|HubSpot", str(l.get("priority") or "")):
+        return 0                                       # the post names GoHighLevel or HubSpot: top, whatever the title
     for i, (_, test) in enumerate(ROLE_PRIORITY):
         if test(t, c):
             return i
@@ -1204,6 +1204,16 @@ def main():
             "channel": "LinkedIn", "email": "", "note": note, "followup": li[0], "messages": [note] + li,
             "email_status": ""})
     print(f"SimplyHired GoHighLevel rows: {len(sh_rows)}")
+    sh_new = {co_key(l["company"]) for l in sh_leads}
+    for l in all_leads:                              # SimplyHired jobs that did not make the Outreach tab, and why
+        if is_simplyhired(l) and co_key(l["company"]) not in sh_new:
+            if not eligible(l):
+                reason = skip_reason(l) or "not remote or missing details"
+            elif co_key(l["company"]) in up_keys:
+                reason = "same company as an Upwork row"
+            else:
+                reason = "already contacted before"
+            print(f"  SimplyHired not queued | {l['company']} | {l['title']} | {reason}")
 
     # ----- Best leads first (no daily limit) -----
     # Each company, best first: confirmed size + good email found -> Email (until the sender's daily limit),
