@@ -16,7 +16,8 @@ jobs:
         category: ["Other Remote", "CRM Automation", "AI Automation", "SEO", "Performance Marketing", "Customer Service",
                    "Bookkeeping", "Virtual Assistant", "Lead Generation", "Social Media",
                    "Content Writing", "Email Marketing", "Design & Video", "Website Support",
-                   "More Remote Roles", "Worldwide Hiring", "SimplyHired GHL"]
+                   "More Remote Roles", "Worldwide Hiring", "SimplyHired GHL",
+                   "Remote Tech Roles"]
         region: ["USA"]
     steps:
       - uses: actions/checkout@v4
