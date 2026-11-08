@@ -104,6 +104,15 @@ CATEGORIES = {
         "enabled": True, "deep_results": 0, "normal_results": 0, "regions": ["USA"],
         "deep_searches": [], "searches": [], "must_mention": [],
     },
+    "Remote Tech Roles": {
+        # Any remote tech role (high value), LinkedIn's Remote filter only. Senior / Lead allowed at 1-50 staff.
+        "enabled": True, "deep_results": 0, "normal_results": 40, "regions": ["USA"], "remote_only": True,
+        "deep_searches": [],
+        "searches": ["Full Stack Developer", "Front End Developer", "Back End Developer", "Software Engineer",
+                     "Software Developer", "Mobile Developer", "QA Engineer", "DevOps Engineer", "Data Analyst",
+                     "Data Engineer"],
+        "must_mention": [],
+    },
     "More Remote Roles": {
         # More roles that small US companies often hire remotely (only used to fill the day)
         "enabled": True, "deep_results": 0, "normal_results": 40, "regions": ["USA"],
@@ -459,7 +468,23 @@ MANAGER_SIGNAL_RE = re.compile(r"work from anywhere|anywhere in the world|worldw
                                r"offshore|overseas|\blatam\b|latin america|philippines", re.I)
 
 # Searches where any outsourceable role counts (only the hard no's apply)
-OPEN_CATEGORIES = {"Other Remote", "More Remote Roles", "Worldwide Hiring"}
+OPEN_CATEGORIES = {"Other Remote", "More Remote Roles", "Worldwide Hiring", "Remote Tech Roles"}
+
+# Tech roles: "Senior" / "Sr" / "Lead" allowed at 1-50 staff (Director, Head, VP, Principal, Staff stay blocked)
+TECH_TITLE_RE = re.compile(r"developer|engineer|programmer|full[- ]?stack|front[- ]?end|back[- ]?end|devops|"
+                           r"\bqa\b|\bsdet\b|data (?:analyst|engineer|scientist)", re.I)
+
+
+def on_li_site(row):
+    return str(row.get("site") or "linkedin").lower() in ("linkedin", "", "nan")
+
+
+def tech_senior(title):
+    return bool(TECH_TITLE_RE.search(title) and is_senior(title)
+                and not is_senior(re.sub(r"\b(?:senior|sr\.?|lead)\b", " ", title, flags=re.I)))
+
+
+HUBSPOT_RE = re.compile(r"hub\s?spot", re.I)
 
 ONSITE_PHRASES = [
     "on-site", "onsite", "on site", "in office", "in-office", "in person",
@@ -762,7 +787,7 @@ def best_category(title, category):
 
 
 OTHER_BLOCK_RE = re.compile(r"\b(account executive|sales representative|sales rep|account manager|controller|"
-                            r"founding|business development executive|"
+                            r"founding|business development executive|sales executive|"
                             r"(?:hardware|field|repair|bench|maintenance|lab|service|installation) technician)\b", re.I)
 
 
@@ -892,6 +917,8 @@ def decide_work(row, title, desc, page_tag="", remote_hit=False):
         return "Remote"                        # a clear phrase ("fully remote") beats the office's city
     if city:
         return "On-site"                       # a city location without "Remote" in the title: treat as office job
+    if remote_hit and text(row.get("site")) in ("linkedin", ""):
+        return "Remote"                        # LinkedIn's own Remote filter, location is a country / state
     says_remote = any(w in d for w in REMOTE_WORDS)
     if rem:
         return "Remote"                        # clear phrase in the post ("fully remote", "100% remote"...)
@@ -1029,6 +1056,8 @@ def priority(title, desc, company, industry):
     tags = []
     if any(r.search(title + " " + desc) for r in GHL_REGEXES):
         tags.append("GHL")
+    elif HUBSPOT_RE.search(title + " " + desc):
+        tags.append("HubSpot")
     ind, c = industry.lower(), company.lower()
     if any(w in ind or w in c for w in REAL_ESTATE_WORDS):
         tags.append("Real Estate")
@@ -1036,7 +1065,7 @@ def priority(title, desc, company, industry):
         tags.append("Marketing")
     if not tags:
         return "", 2
-    return "⭐ " + " · ".join(tags), (0 if "GHL" in tags else 1)
+    return "⭐ " + " · ".join(tags), (0 if "GHL" in tags or "HubSpot" in tags else 1)
 
 
 def parse_size(raw):
@@ -1262,6 +1291,10 @@ def skip_note(row, title, desc, company, cat_name, reason, remote_pass=False, si
     """Keeps a remote job we are dropping, so you can see (and rescue) it in the Skipped tab."""
     if len(SKIPPED) >= 150 or any(x["url"] == text(row.get("job_url")) for x in SKIPPED):
         return
+    if text(row.get("site")) == "simplyhired":
+        SKIPPED.append({"reason": reason, "title": title, "company": company, "url": text(row.get("job_url")),
+                        "category": best_category(title, cat_name), "size": size or "", "source": "SimplyHired"})
+        return
     try:
         hit = remote_pass or job_id_of(row) in REMOTE_FILTER_IDS
         if decide_work(row, title, desc, "", hit) != "Remote":
@@ -1277,6 +1310,7 @@ SH_BUDGET_USD = 0.10                             # SimplyHired's own daily Apify
 SH_MAX_LISTINGS = 200
 APIFY_TOKEN = os.environ.get("APIFY_TOKEN", "").strip()
 SH_STATS = {"listed": 0, "too_old": 0, "not_remote": 0, "sponsored": 0, "status": ""}
+SH_JOBS = []          # every SimplyHired job kept from Apify: (url, company, title), for the "dropped" log lines
 
 
 def sh_date(value):
@@ -1316,7 +1350,8 @@ def simplyhired_ghl():
         SH_STATS["status"] = "no Apify key (APIFY_TOKEN missing in GitHub secrets)"
         print(f"  SimplyHired | gohighlevel: {SH_STATS}")
         return None
-    body = {"mode": "search", "queries": ["gohighlevel"], "location": "Remote", "country": "us",
+    body = {"mode": "search", "queries": ["gohighlevel", "go high level", "highlevel"], "location": "",
+            "country": "us",
             "jobType": "any", "datePosted": str(SH_DAYS), "remoteOnly": True, "sortBy": "relevance",
             "skipSponsored": False, "maxListings": SH_MAX_LISTINGS, "fetchDetails": False,
             "proxy": {"useApifyProxy": True, "apifyProxyGroups": ["RESIDENTIAL"], "apifyProxyCountry": "US"}}
@@ -1338,13 +1373,16 @@ def simplyhired_ghl():
         posted = sh_date(j.get("datePosted") or j.get("dateOnIndeed"))
         if posted and posted < cutoff:
             SH_STATS["too_old"] += 1
+            print(f"  SimplyHired dropped | {company} | {title} | older than {SH_DAYS} days ({posted})")
             continue
         tags = " ".join(str(x) for x in (j.get("workSettings") or []) + (j.get("remoteAttributes") or []))
         loc = str(j.get("location") or j.get("formattedLocation") or "")
         if not re.search(r"remote", tags + " " + loc, re.I):
             SH_STATS["not_remote"] += 1                    # remote only (same as the Remote tick box)
+            print(f"  SimplyHired dropped | {company} | {title} | not remote ({loc or 'no location'})")
             continue
         job_url = str(j.get("url") or "https://www.simplyhired.com/job/" + key)
+        SH_JOBS.append((job_url, company, title))
         rows.append({"site": "simplyhired", "id": f"simplyhired:{job_url}", "job_url": job_url, "title": title,
                      "company": company, "description": str(j.get("descriptionText") or j.get("snippet") or ""),
                      "location": "Remote" if not loc or "remote" in loc.lower() else "Remote, " + loc,
@@ -1527,7 +1565,8 @@ def main():
             extra_locs = cfg.get("extra_locations", [])
             for location, short in list(rcfg["locations"]) + list(extra_locs):
                 extra_loc = (location, short) in extra_locs     # e.g. LinkedIn's "Worldwide" location
-                passes = (True,) if cat_name == "Remote Boards" or extra_loc or sh_cat else (True, False)
+                passes = (True,) if cat_name == "Remote Boards" or extra_loc or sh_cat or cfg.get("remote_only") \
+                    else (True, False)
                 for term, n, remote_pass in [(t, k, rp) for t, k in terms for rp in passes]:
                     df = remote_boards() if cat_name == "Remote Boards" else simplyhired_ghl() if sh_cat else \
                         search(term, n, location, remote_pass, cat_name)
@@ -1558,9 +1597,12 @@ def main():
                         ww_mgr = bool(is_senior(title) and not crm_mgr and manager_only(title)
                                       and MANAGER_SIGNAL_RE.search(desc))
                         # A job that names GoHighLevel: any title (on LinkedIn the 1-50 staff limit still applies)
-                        ghl_any = bool(sh_cat or GHL_RE.search(title + " " + desc))
+                        ghl_any = bool(sh_cat or GHL_RE.search(title + " " + desc)
+                                       or (on_li_site(row) and HUBSPOT_RE.search(title + " " + desc)))
                         if ghl_any and is_senior(title) and not crm_mgr and not sh_cat:
                             crm_mgr = True                               # size checked below (1-50 staff)
+                        if tech_senior(title) and not crm_mgr:
+                            crm_mgr = True                               # Senior / Lead developer: 1-50 staff only
                         if is_senior(title) and not crm_mgr and not ww_mgr and not sh_cat:
                             ex_senior.add(key)
                             skip_note(row, title, desc, company, cat_name, "Senior title", remote_pass)
@@ -1697,6 +1739,13 @@ def main():
 
     leads = sorted(found.values(), key=lambda l: (
         l["priority_rank"], l["region_rank"], WORK_ORDER.get(l["work_type"], 9), l["posted"]))
+    if SH_JOBS:                                   # one line per SimplyHired job that did not become a lead
+        kept = {l["url"] for l in leads}
+        why = {x["url"]: x["reason"] for x in SKIPPED}
+        for url, company, title in SH_JOBS:
+            if url not in kept:
+                print(f"  SimplyHired dropped | {company} | {title} | "
+                      f"{why.get(url, 'other rule (agency, non-English, duplicate company or missing details)')}")
     print(f"\nChecked {len(checked)} | agencies {len(ex_agency)} | big {len(ex_big)} | "
           f"non-English {len(ex_lang)} | location-locked {len(ex_loc)} | incomplete {len(ex_incomplete)} | "
           f"senior {len(ex_senior)} | wrong role {len(ex_role)} | "
