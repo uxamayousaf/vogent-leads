@@ -1735,6 +1735,7 @@ def main():
                             "site": text(row.get("site")) or "linkedin",
                             "source": SOURCE_LABELS.get(text(row.get("site")) or "linkedin", "LinkedIn"),
                             "people": PEOPLE_CACHE.get(company_url.rstrip("/"), []),
+                            "desc": desc[:2500],     # for her account's AI drafting only (never sent to the Sheet)
                         }
 
     if not ran:
@@ -1763,7 +1764,8 @@ def main():
     with open(os.path.join("candidates", fname), "w") as fh:
         json.dump(leads, fh)
 
-    payload = {"token": TOKEN, "category": ", ".join(ran), "leads": leads,
+    sheet_leads = [{k: v for k, v in l.items() if k != "desc"} for l in leads]   # descriptions stay out of the Sheet
+    payload = {"token": TOKEN, "category": ", ".join(ran), "leads": sheet_leads,
               "checked": len(checked), "excluded": len(ex_agency),
               "excluded_big": len(ex_big), "excluded_lang": len(ex_lang),
               "excluded_incomplete": len(ex_incomplete), "excluded_location": len(ex_loc),
