@@ -1291,6 +1291,12 @@ def main():
             r.update({"dm_name": p["name"], "dm_url": p["url"], "dm_title": p["title"],
                       "note": note, "followup": li[0], "messages": [note] + li})
         print(f"Apify founders: {len(hits)} found with ${left:.2f} left after Upwork")
+    # ----- Her account (colleague's LinkedIn via HeyReach): remote tech leads only, never breaks your run -----
+    try:
+        import her_account
+        her_account.run(rows, today, post, free_founder, skill_list)
+    except Exception as e:
+        print("Her account step skipped:", e)
     for r in rows:
         r.pop("_lead", None)
     found = {r["company"]: 1 for r in rows if r["dm_name"] != "Find founder ↗"}
