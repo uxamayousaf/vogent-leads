@@ -61,3 +61,7 @@ jobs:
           SHEET_WEBAPP_URL: ${{ secrets.SHEET_WEBAPP_URL }}
           SHEET_TOKEN: ${{ secrets.SHEET_TOKEN }}
           APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}            # her account: AI drafting (free tier)
+          HEYREACH_API_KEY: ${{ secrets.HEYREACH_API_KEY }}        # her account: adding this switches her account on
+          HEYREACH_CAMPAIGN_ID: ${{ secrets.HEYREACH_CAMPAIGN_ID }}
+          HEYREACH_ACCOUNT_ID: ${{ secrets.HEYREACH_ACCOUNT_ID }}
