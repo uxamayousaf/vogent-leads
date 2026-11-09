@@ -420,7 +420,10 @@ HARD_LOCAL_TITLE_RE = re.compile(r"american accent|\bw-?2\b|\benterprise\b|\breg
                                  r"(?:radio|patho|cardio|dermato|onco|anesthesio|uro|gastroentero|ophthalmo|hemato|"
                                  r"nephro|pulmono)logist|teleradiolog|psychiatr|surgeon|veterinar|optometr|chiropract|"
                                  r"paramedic|hygienist|midwi|sonograph|pharmacy tech|\bdoctor\b|\bdvm\b|\bdds\b|"
-                                 r"\blpn\b|\bcna\b|\bcrna\b|\bemt\b", re.I)
+                                 r"\blpn\b|\bcna\b|\bcrna\b|\bemt\b|"
+                                 r"\b(?:house |home |commercial |residential )?clean(?:er|ers|ing specialist|ing technician|"
+                                 r"ing crew)\b|janitor|housekeep|\bramp (?:agent|operations)|\bmining\b|\bminers?\b|"
+                                 r"\bteachers?\b|\beducators?\b|special education|\b[a-z]{2} certified\b", re.I)
 # Scam-style or junk posts (home-based travel booking, "No Experience Needed", event recruiting ads)
 JUNK_COMPANIES = {"dreamscape", "premierdestinationgroup", "torentify"}
 JUNK_TITLE_RE = re.compile(r"no experience (?:needed|required|necessary)|management trainee|let[\u2019']?s (?:connect|meet) at|meet us at|"
@@ -786,7 +789,8 @@ def best_category(title, category):
     return "CRM Automation" if category == "Remote Boards" else category
 
 
-OTHER_BLOCK_RE = re.compile(r"\b(account executive|sales representative|sales rep|account manager|controller|"
+OTHER_BLOCK_RE = re.compile(r"\b(account executives?|sales representatives?|sales reps?|sales associates?|"
+                            r"account manager|controller|"
                             r"founding|business development executive|sales executive|"
                             r"(?:hardware|field|repair|bench|maintenance|lab|service|installation) technician)\b", re.I)
 
@@ -909,6 +913,8 @@ def decide_work(row, title, desc, page_tag="", remote_hit=False):
     first_part = loc.split(",")[0].strip().lower()
     state_wide = bool(re.fullmatch(r"(?:" + US_STATES + r")", first_part))       # "California, United States"
     city = bool(CITY_LOC_RE.search(loc)) and "remote" not in loc.lower() and not state_wide
+    if re.search(r"\bon[- ]?site\b|\bin[- ]office\b|\bin[- ]person\b", title, re.I) and "remote" not in title.lower():
+        return "On-site"                       # "Graphic Designer - (On Site)", "Engineer - Onsite - Shiloh IL"
     if page_tag == "Remote" or loc_remote or "remote" in title.lower():
         return "Remote"
     if TITLE_CITY_RE.search(title):
@@ -917,8 +923,6 @@ def decide_work(row, title, desc, page_tag="", remote_hit=False):
         return "Remote"                        # a clear phrase ("fully remote") beats the office's city
     if city:
         return "On-site"                       # a city location without "Remote" in the title: treat as office job
-    if remote_hit and text(row.get("site")) in ("linkedin", ""):
-        return "Remote"                        # LinkedIn's own Remote filter, location is a country / state
     says_remote = any(w in d for w in REMOTE_WORDS)
     if rem:
         return "Remote"                        # clear phrase in the post ("fully remote", "100% remote"...)
@@ -1350,7 +1354,7 @@ def simplyhired_ghl():
         SH_STATS["status"] = "no Apify key (APIFY_TOKEN missing in GitHub secrets)"
         print(f"  SimplyHired | gohighlevel: {SH_STATS}")
         return None
-    body = {"mode": "search", "queries": ["gohighlevel", "go high level", "highlevel"], "location": "",
+    body = {"mode": "search", "queries": ["gohighlevel"], "location": "",
             "country": "us",
             "jobType": "any", "datePosted": str(SH_DAYS), "remoteOnly": True, "sortBy": "relevance",
             "skipSponsored": False, "maxListings": SH_MAX_LISTINGS, "fetchDetails": False,
