@@ -423,7 +423,8 @@ HARD_LOCAL_TITLE_RE = re.compile(r"american accent|\bw-?2\b|\benterprise\b|\breg
                                  r"\blpn\b|\bcna\b|\bcrna\b|\bemt\b|"
                                  r"\b(?:house |home |commercial |residential )?clean(?:er|ers|ing specialist|ing technician|"
                                  r"ing crew)\b|janitor|housekeep|\bramp (?:agent|operations)|\bmining\b|\bminers?\b|"
-                                 r"\bteachers?\b|\beducators?\b|special education|\b[a-z]{2} certified\b", re.I)
+                                 r"\bteachers?\b|\beducators?\b|special education|\b[a-z]{2} certified\b|"
+                                 r"\binstallers?\b|\binstallation (?:tech|crew)", re.I)
 # Scam-style or junk posts (home-based travel booking, "No Experience Needed", event recruiting ads)
 JUNK_COMPANIES = {"dreamscape", "premierdestinationgroup", "torentify"}
 JUNK_TITLE_RE = re.compile(r"no experience (?:needed|required|necessary)|management trainee|let[\u2019']?s (?:connect|meet) at|meet us at|"
@@ -499,7 +500,8 @@ WEBAPP_URL = os.environ["SHEET_WEBAPP_URL"]
 TOKEN = os.environ["SHEET_TOKEN"]
 ONLY_CATEGORY = os.environ.get("CATEGORY", "").strip()
 ONLY_REGION = os.environ.get("REGION", "").strip()
-WORK_ORDER = {"Remote": 0, "Not confirmed": 1, "Not stated": 2, "Hybrid": 3, "On-site": 4}
+WORK_ORDER = {"Remote": 0, "Remote (LinkedIn filter)": 1, "Not confirmed": 2, "Not stated": 3, "Hybrid": 4,
+              "On-site": 5}
 UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                     "(KHTML, like Gecko) Chrome/126 Safari/537.36"}
 SIZE_CACHE = {}
@@ -566,8 +568,8 @@ KEEP_UPPER = {"SEO", "SDR", "BDR", "CRM", "GHL", "AI", "UI", "UX", "PPC", "HR", 
 
 def tidy_role(role, clean):
     """'TechnologyOne/TechOne' (no role word) -> 'Property & Rating Specialist'; 'REELS/CLIPS/EDITOR' -> 'Reels/Clips/Editor'."""
-    role = str(role or "").strip().rstrip(".")
-    if role and not ROLE_NOUN.search(role):
+    role = str(role or "").strip().rstrip(".").strip("()[] ")
+    if role and not (ROLE_NOUN.search(role) or ROLE_END_RE.search(role)):
         # "SEO (Search Engine Optimization) Specialist" -> "SEO Specialist"
         no_brackets = re.sub(r"\s+", " ", re.sub(r"\s*\([^)]*\)", " ", clean)).strip()
         first = re.split(r"\s+[-|\u2013\u2014]\s+|\s*\||\[|,|:", no_brackets)[0].strip().rstrip(".")
@@ -575,7 +577,7 @@ def tidy_role(role, clean):
             role = first
     if role and not ROLE_NOUN.search(role):
         for part in re.split(r"\s+[-|\u2013\u2014]\s+|\s*\||\(|\[|,|:", clean):
-            part = part.strip().rstrip(".")
+            part = part.strip().rstrip(".").strip("()[] ")
             if ROLE_NOUN.search(part) and len(part) <= 45:
                 role = re.sub(r"\b(" + ROLE_NOUN.pattern[5:-5] + r")s\b", r"\1", part, flags=re.I) \
                     if re.search(r"s\b$", part) else part
@@ -605,6 +607,9 @@ def keep_role_end(role, limit=45):
     Representative' -> 'Business Development Representative'); otherwise cut at a word break."""
     if len(role) <= limit:
         return role
+    m = re.match(r"^(.{3,45}?)\s+(?:and|&)\s+", role)       # "Executive Assistant and Operations Coordinator"
+    if m and ROLE_END_RE.search(m.group(1)):
+        return m.group(1)                                     # -> "Executive Assistant"
     words = role.split(" ")
     if ROLE_END_RE.search(role):
         while len(words) > 1 and len(" ".join(words)) > limit:
@@ -791,7 +796,8 @@ def best_category(title, category):
 
 OTHER_BLOCK_RE = re.compile(r"\b(account executives?|sales representatives?|sales reps?|sales associates?|"
                             r"account manager|controller|"
-                            r"founding|business development executive|sales executive|"
+                            r"founding|business development executive|sales executive|salesperson|salespeople|"
+                            r"sales consultants?|business development managers?|"
                             r"(?:hardware|field|repair|bench|maintenance|lab|service|installation) technician)\b", re.I)
 
 
@@ -928,10 +934,15 @@ def decide_work(row, title, desc, page_tag="", remote_hit=False):
         return "Remote"                        # clear phrase in the post ("fully remote", "100% remote"...)
     if remote_hit and says_remote:
         return "Remote"                        # LinkedIn's Remote filter AND the post itself mentions remote
+    if remote_hit and text(row.get("site")) in ("linkedin", "") and not TITLE_PLACE_RE.search(title):
+        return "Remote (LinkedIn filter)"      # LinkedIn lists it as remote; the post doesn't say so (ranked lower)
     if says_remote or remote_hit:
         return "Not confirmed"                 # one weak signal only: never pitched as remote
     return "Not stated"
 
+
+# A place in the title ("Customer Service Representative - St. Louis, MO"): not trusted as remote
+TITLE_PLACE_RE = re.compile(r"[-|(\u2013\u2014]\s*[A-Z][A-Za-z.' ]+,\s*[A-Z]{2}\b")
 
 # "Fremont, CA", "Austin, Texas, United States", "San Francisco Bay Area": a city or metro, not country-wide
 CITY_LOC_RE = re.compile(r"^[^,]+,\s*(?:[A-Z]{2}|[A-Z][a-z]+(?: [A-Z][a-z]+)?)(?:,\s*United States)?$|"
@@ -1301,7 +1312,7 @@ def skip_note(row, title, desc, company, cat_name, reason, remote_pass=False, si
         return
     try:
         hit = remote_pass or job_id_of(row) in REMOTE_FILTER_IDS
-        if decide_work(row, title, desc, "", hit) != "Remote":
+        if decide_work(row, title, desc, "", hit) not in ("Remote", "Remote (LinkedIn filter)"):
             return
     except Exception:
         return
