@@ -37,7 +37,7 @@ APIFY_MAX_PEOPLE = 40                    # most people looked up in one pass
 # Job boards, job aggregators and "entry level, commission" style posts are never contacted
 NOT_EMPLOYER_NAME_WORDS = ["careers", "jobs", "job board", "jobboard", "hiring", "hunter", "recruit",
                            "staffing", "talent", "wiraa", "remotehunter", "jobot", "dice", "ziprecruiter",
-                           "abilitylinks", "linkedin", "indeed", "glassdoor", "upwork", "fiverr", "shyftoff",
+                           "abilitylinks", "linkedin", "indeed", "glassdoor", "upwork", "fiverr", "shyftoff", "mediabistro",
                            "jobgether", "town of", "city of", "county", "government", "ministry",
                            "municipality", "university", "school district", "college", "authority",
                            "department", "district", "state of", "commonwealth", "public schools"]
@@ -93,8 +93,8 @@ WEBAPP_URL = os.environ["SHEET_WEBAPP_URL"]
 TOKEN = os.environ["SHEET_TOKEN"]
 APIFY_TOKEN = os.environ.get("APIFY_TOKEN", "").strip()
 PKT = dt.timezone(dt.timedelta(hours=5))
-WORK_ORDER = {"Remote": 0, "Not confirmed": 1, "Remote (check)": 1, "Remote (mentioned)": 1, "Not stated": 2, "Hybrid": 3, "On-site": 4}
-OUTREACH_WORK_TYPES = ["Remote"]   # only jobs LinkedIn itself shows as Remote (never On-site, Hybrid or unconfirmed)
+WORK_ORDER = {"Remote": 0, "Remote (LinkedIn filter)": 1, "Not confirmed": 1, "Remote (check)": 1, "Remote (mentioned)": 1, "Not stated": 2, "Hybrid": 3, "On-site": 4}
+OUTREACH_WORK_TYPES = ["Remote", "Remote (LinkedIn filter)"]   # never On-site, Hybrid or unconfirmed
 EMAIL_DAILY = 30                         # new emails per day (USA first, then Canada, then UK).
                                          # 22 new + 3 follow-ups each = about 80 sends a day, under the 95 cap
 TITLE_RANK = ["founder", "co-founder", "ceo", "chief executive", "owner", "president",
@@ -270,7 +270,8 @@ def rank_key(l):
     except ValueError:
         newest = 0
     ghl = 0 if "GHL" in str(l.get("priority") or "") else 1
-    return (role_tier(l), 1 if onsite_ask(l) else 0, size_tier(l), 0 if l.get("worldwide") else 1, ghl, newest)
+    filt = 1 if l.get("work_type") == "Remote (LinkedIn filter)" else 0
+    return (role_tier(l), 1 if onsite_ask(l) else 0, filt, size_tier(l), 0 if l.get("worldwide") else 1, ghl, newest)
 
 
 # ---------- 2. Find decision makers with Apify ----------
@@ -822,6 +823,9 @@ def keep_role_end(role, limit=45):
     Representative' -> 'Business Development Representative'); otherwise cut at a word break."""
     if len(role) <= limit:
         return role
+    m = re.match(r"^(.{3,45}?)\s+(?:and|&)\s+", role)       # "Executive Assistant and Operations Coordinator"
+    if m and ROLE_END_RE.search(m.group(1)):
+        return m.group(1)                                     # -> "Executive Assistant"
     words = role.split(" ")
     if ROLE_END_RE.search(role):
         while len(words) > 1 and len(" ".join(words)) > limit:
