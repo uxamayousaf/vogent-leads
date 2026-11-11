@@ -105,12 +105,21 @@ CATEGORIES = {
         "deep_searches": [], "searches": [], "must_mention": [],
     },
     "Remote Tech Roles": {
-        # Any remote tech role (high value), LinkedIn's Remote filter only. Senior / Lead allowed at 1-50 staff.
-        "enabled": True, "deep_results": 0, "normal_results": 40, "regions": ["USA"], "remote_only": True,
+        # Remote tech roles A (high value). Senior / Lead allowed at 1-50 staff. The post must say remote.
+        "enabled": True, "deep_results": 0, "normal_results": 80, "regions": ["USA"], "remote_only": True,
         "deep_searches": [],
         "searches": ["Full Stack Developer", "Front End Developer", "Back End Developer", "Software Engineer",
-                     "Software Developer", "Mobile Developer", "QA Engineer", "DevOps Engineer", "Data Analyst",
-                     "Data Engineer"],
+                     "Software Developer", "Mobile Developer", "iOS Developer", "Android Developer", "QA Engineer",
+                     "DevOps Engineer"],
+        "must_mention": [],
+    },
+    "Remote Tech Roles B": {
+        # Remote tech roles B: AI, data and platform roles. Same rules as A.
+        "enabled": True, "deep_results": 0, "normal_results": 80, "regions": ["USA"], "remote_only": True,
+        "deep_searches": [],
+        "searches": ["Forward Deployed Engineer", "AI Engineer", "Machine Learning Engineer", "Data Scientist",
+                     "Data Engineer", "Data Analyst", "Python Developer", "Node.js Developer", ".NET Developer",
+                     "Java Developer", "Solutions Engineer", "GTM Engineer", "Automation Engineer"],
         "must_mention": [],
     },
     "More Remote Roles": {
@@ -424,10 +433,11 @@ HARD_LOCAL_TITLE_RE = re.compile(r"american accent|\bw-?2\b|\benterprise\b|\breg
                                  r"\b(?:house |home |commercial |residential )?clean(?:er|ers|ing specialist|ing technician|"
                                  r"ing crew)\b|janitor|housekeep|\bramp (?:agent|operations)|\bmining\b|\bminers?\b|"
                                  r"\bteachers?\b|\beducators?\b|special education|\b[a-z]{2} certified\b|"
-                                 r"\binstallers?\b|\binstallation (?:tech|crew)", re.I)
+                                 r"\binstallers?\b|\binstallation (?:tech|crew)|general labou?r|\blabou?rers?\b|"
+                                 r"personal trainers?|fitness (?:coach|instructor)", re.I)
 # Scam-style or junk posts (home-based travel booking, "No Experience Needed", event recruiting ads)
 JUNK_COMPANIES = {"dreamscape", "premierdestinationgroup", "torentify"}
-JUNK_TITLE_RE = re.compile(r"no experience (?:needed|required|necessary)|management trainee|let[\u2019']?s (?:connect|meet) at|meet us at|"
+JUNK_TITLE_RE = re.compile(r"no experience (?:needed|required|necessary)|management trainee|travel associate|let[\u2019']?s (?:connect|meet) at|meet us at|"
                            r"visit (?:us|our booth) at|career fair|job fair|hiring event|travel bookings?\b|"
                            r"data entry[^|]*(?:work from home|\bwfh\b)", re.I)
 TITLE_TAG_RE = re.compile(r"^(?:100%\s*|fully\s+)?(?:remote|online|virtual|work from home|wfh)(?:\s*\(.*\))?$|"
@@ -455,10 +465,20 @@ FOREIGN_HQ_RE = re.compile(r"\b(?:england|scotland|wales|united kingdom|london|c
                            r"south africa|kenya|egypt|brazil|mexico|argentina|colombia|chile|peru|japan|china|"
                            r"hong kong|korea|vietnam|indonesia|malaysia|new zealand|turkey|romania|ukraine|czech|"
                            r"greece|hungary|bangladesh|sri lanka|saudi arabia|qatar|estonia|lithuania|latvia|"
-                           r"bulgaria|serbia|croatia|cyprus|malta|luxembourg)\b", re.I)
+                           r"bulgaria|serbia|croatia|cyprus|malta|luxembourg|"
+                           r"beijing|shanghai|shenzhen|guangzhou|hangzhou|xi'?an|shaanxi|guangdong|zhejiang|jiangsu|"
+                           r"chengdu|wuhan|tianjin|nanjing|bangalore|bengaluru|mumbai|new delhi|hyderabad|pune|"
+                           r"chennai|kolkata|noida|gurgaon|gurugram|ahmedabad|karnataka|maharashtra|telangana|"
+                           r"tamil nadu|manila|cebu|makati|quezon|davao|taguig|pasig|lahore|karachi|islamabad|"
+                           r"rawalpindi|faisalabad)\b", re.I)
+# A Chinese city in the company name ("Xi'an KINGWELL OILFIELD") is a foreign company too
+FOREIGN_NAME_RE = re.compile(r"\b(?:xi'?an|shaanxi|shenzhen|guangzhou|shanghai|beijing|hangzhou|zhejiang|guangdong)\b",
+                             re.I)
 
 
-def foreign_company(company_url):
+def foreign_company(company_url, company=""):
+    if FOREIGN_NAME_RE.search(str(company or "")):
+        return True
     url = str(company_url or "").split("?")[0].rstrip("/")
     if FOREIGN_PAGE_RE.match(url):
         return True
@@ -472,7 +492,7 @@ MANAGER_SIGNAL_RE = re.compile(r"work from anywhere|anywhere in the world|worldw
                                r"offshore|overseas|\blatam\b|latin america|philippines", re.I)
 
 # Searches where any outsourceable role counts (only the hard no's apply)
-OPEN_CATEGORIES = {"Other Remote", "More Remote Roles", "Worldwide Hiring", "Remote Tech Roles"}
+OPEN_CATEGORIES = {"Other Remote", "More Remote Roles", "Worldwide Hiring", "Remote Tech Roles", "Remote Tech Roles B"}
 
 # Tech roles: "Senior" / "Sr" / "Lead" allowed at 1-50 staff (Director, Head, VP, Principal, Staff stay blocked)
 TECH_TITLE_RE = re.compile(r"developer|engineer|programmer|full[- ]?stack|front[- ]?end|back[- ]?end|devops|"
@@ -575,13 +595,18 @@ def tidy_role(role, clean):
         first = re.split(r"\s+[-|\u2013\u2014]\s+|\s*\||\[|,|:", no_brackets)[0].strip().rstrip(".")
         if ROLE_NOUN.search(first) and len(first) <= 45:
             role = first
-    if role and not ROLE_NOUN.search(role):
+    if role and not (ROLE_NOUN.search(role) or ROLE_END_RE.search(role)):
         for part in re.split(r"\s+[-|\u2013\u2014]\s+|\s*\||\(|\[|,|:", clean):
             part = part.strip().rstrip(".").strip("()[] ")
+            if re.match(r"(?:and|or|&)\s", part, re.I):          # "Web, UX, and Digital Experience Designer"
+                whole = re.split(r"\s+[-|\u2013\u2014]\s+|\s*\||\(|\[|:", clean)[0].strip()
+                part = re.sub(r",\s*(and|or|&)\s", r" \1 ", whole) if len(whole) <= 45 else \
+                    re.sub(r"^(?:and|or|&)\s+", "", part, flags=re.I)
             if ROLE_NOUN.search(part) and len(part) <= 45:
                 role = re.sub(r"\b(" + ROLE_NOUN.pattern[5:-5] + r")s\b", r"\1", part, flags=re.I) \
                     if re.search(r"s\b$", part) else part
                 break
+    role = re.sub(r"\s{2,}", " ", role)
     letters = [c for c in role if c.isalpha()]
     if len(letters) > 4 and all(c.isupper() for c in letters):
         role = re.sub(r"[A-Za-z]+", lambda m: m.group(0) if m.group(0) in KEEP_UPPER else m.group(0).capitalize(), role)
@@ -797,6 +822,7 @@ def best_category(title, category):
 OTHER_BLOCK_RE = re.compile(r"\b(account executives?|sales representatives?|sales reps?|sales associates?|"
                             r"account manager|controller|"
                             r"founding|business development executive|sales executive|salesperson|salespeople|"
+                            r"salesm[ae]n|saleswom[ae]n|"
                             r"sales consultants?|business development managers?|"
                             r"(?:hardware|field|repair|bench|maintenance|lab|service|installation) technician)\b", re.I)
 
@@ -934,8 +960,6 @@ def decide_work(row, title, desc, page_tag="", remote_hit=False):
         return "Remote"                        # clear phrase in the post ("fully remote", "100% remote"...)
     if remote_hit and says_remote:
         return "Remote"                        # LinkedIn's Remote filter AND the post itself mentions remote
-    if remote_hit and text(row.get("site")) in ("linkedin", "") and not TITLE_PLACE_RE.search(title):
-        return "Remote (LinkedIn filter)"      # LinkedIn lists it as remote; the post doesn't say so (ranked lower)
     if says_remote or remote_hit:
         return "Not confirmed"                 # one weak signal only: never pitched as remote
     return "Not stated"
@@ -1681,7 +1705,7 @@ def main():
                         if text(row.get("site")) in BOARD_SITES and not us_company(company_url):
                             ex_loc.add(key)                              # remote boards: US companies only
                             continue
-                        if foreign_company(company_url) and not sh_cat:
+                        if foreign_company(company_url, company) and not sh_cat:
                             ex_loc.add(key)                              # company based outside the US
                             skip_note(row, title, desc, company, cat_name, "Company based outside the US",
                                       remote_pass, size_label)
