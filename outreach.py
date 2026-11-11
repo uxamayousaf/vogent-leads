@@ -94,7 +94,7 @@ TOKEN = os.environ["SHEET_TOKEN"]
 APIFY_TOKEN = os.environ.get("APIFY_TOKEN", "").strip()
 PKT = dt.timezone(dt.timedelta(hours=5))
 WORK_ORDER = {"Remote": 0, "Remote (LinkedIn filter)": 1, "Not confirmed": 1, "Remote (check)": 1, "Remote (mentioned)": 1, "Not stated": 2, "Hybrid": 3, "On-site": 4}
-OUTREACH_WORK_TYPES = ["Remote", "Remote (LinkedIn filter)"]   # never On-site, Hybrid or unconfirmed
+OUTREACH_WORK_TYPES = ["Remote"]   # the post itself says remote (never On-site, Hybrid or unconfirmed)
 EMAIL_DAILY = 30                         # new emails per day (USA first, then Canada, then UK).
                                          # 22 new + 3 follow-ups each = about 80 sends a day, under the 95 cap
 TITLE_RANK = ["founder", "co-founder", "ceo", "chief executive", "owner", "president",
@@ -220,7 +220,7 @@ def is_nonprofit(l):
     """Nonprofits and public bodies rarely buy offshore staffing: ranked lower, never removed."""
     site = str(l.get("website") or "").lower()
     return bool(NONPROFIT_IND.search(str(l.get("industry") or "")) or NONPROFIT_NAME.search(str(l.get("company") or ""))
-                or re.search(r"\.org(?:\.[a-z]{2})?(?:/|$)", site)
+                or re.search(r"\.org(?:\.[a-z]{2})?(?:/|$)", site) or re.search(r"\.edu(?:/|$)", site)
                 or "linkedin.com/school/" in str(l.get("company_url") or "").lower())
 
 
@@ -270,8 +270,7 @@ def rank_key(l):
     except ValueError:
         newest = 0
     ghl = 0 if "GHL" in str(l.get("priority") or "") else 1
-    filt = 1 if l.get("work_type") == "Remote (LinkedIn filter)" else 0
-    return (role_tier(l), 1 if onsite_ask(l) else 0, filt, size_tier(l), 0 if l.get("worldwide") else 1, ghl, newest)
+    return (role_tier(l), 1 if onsite_ask(l) else 0, size_tier(l), 0 if l.get("worldwide") else 1, ghl, newest)
 
 
 # ---------- 2. Find decision makers with Apify ----------
@@ -984,9 +983,9 @@ BAD_LOCAL = ["noreply", "no-reply", "donotreply", "privacy", "legal", "abuse", "
              "yourname", "press", "media", "dmca", "security", "compliance", "gdpr",
              "enroll", "admission", "orders", "booking", "reservation", "donate", "donation", "membership",
              "members", "events", "bug", "training", "learning", "course", "academy",
-             "shareholder", "investor", "affiliate", "partners"]
-BAD_LOCAL_EXACT = {"care", "customercare", "customer.care", "customer-care"}   # exact only, so careers@ still works
-BAD_DOMAIN = ["example.com", "domain.com", "sentry", "wixpress", "godaddy", "squarespace", "wordpress",
+             "shareholder", "investor", "affiliate", "partners", "alumni"]
+BAD_LOCAL_EXACT = {"care", "customercare", "customer.care", "customer-care", "ads", "advertising"}   # exact only, so careers@ still works
+BAD_DOMAIN = [".edu", "example.com", "domain.com", "sentry", "wixpress", "godaddy", "squarespace", "wordpress",
               "email.com", "yourdomain", "company.com", "mysite", "schema.org", "w3.org"]
 HIRING_LOCAL = ["careers", "career", "jobs", "job", "hr", "hiring", "recruit", "talent", "people", "work",
                 "applications", "apply"]
