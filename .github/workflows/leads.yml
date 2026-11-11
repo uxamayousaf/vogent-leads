@@ -17,7 +17,7 @@ jobs:
                    "Bookkeeping", "Virtual Assistant", "Lead Generation", "Social Media",
                    "Content Writing", "Email Marketing", "Design & Video", "Website Support",
                    "More Remote Roles", "Worldwide Hiring", "SimplyHired GHL",
-                   "Remote Tech Roles"]
+                   "Remote Tech Roles", "Remote Tech Roles B"]
         region: ["USA"]
     steps:
       - uses: actions/checkout@v4
