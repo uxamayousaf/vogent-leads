@@ -38,6 +38,8 @@ MAX_EMPLOYEES = 50      # founder-led small companies only (unknown size is kept
 # Each location: (LinkedIn search location, short name shown in sheet)
 REGIONS = {
     "USA": {"enabled": True, "rank": 1, "scale": 1.0, "locations": [("United States", "USA")]},   # normal depth (deeper got us rate-limited)
+    "Canada": {"enabled": True, "rank": 2, "scale": 1.0, "locations": [("Canada", "Canada")]},
+    "UK": {"enabled": True, "rank": 3, "scale": 1.0, "locations": [("United Kingdom", "UK")]},
 }
 SITES = ["linkedin"]          # LinkedIn only (Indeed, ZipRecruiter and Google Jobs switched off)
 SOURCE_LABELS = {"linkedin": "LinkedIn", "indeed": "Indeed", "zip_recruiter": "ZipRecruiter", "google": "Google Jobs",
@@ -55,7 +57,7 @@ CATEGORIES = {
         "searches": [
             "HubSpot Specialist", "HubSpot Administrator", "CRM Automation Specialist",
             "CRM Administrator", "CRM Manager", "CRM Specialist",
-            "Marketing Automation Specialist", "Funnel Builder",
+            "Marketing Automation Specialist", "Funnel Builder", "HubSpot Admin",
         ],
         "must_mention": GHL_TERMS + ["hubspot", "zoho crm", "keap", "activecampaign", "pipedrive"],
     },
@@ -65,7 +67,7 @@ CATEGORIES = {
         "searches": [
             "Automation Specialist", "Zapier Expert", "AI Agent Developer",
             "Workflow Automation Specialist", "AI Integration Specialist",
-            "No-Code Automation", "AI Automation Consultant",
+            "No-Code Automation", "AI Automation Consultant", "Make.com Specialist", "Zapier Specialist",
         ],
         "must_mention": [
             "n8n", "make.com", "integromat", "zapier", "ai agent", "ai agents",
@@ -86,16 +88,17 @@ CATEGORIES = {
     },
     "Remote Boards": {
         # Remote-first job boards (switched off: never produced a lead)
-        "enabled": False, "deep_results": 0, "normal_results": 0, "regions": ["USA"],
+        "enabled": False, "deep_results": 0, "normal_results": 0, "regions": ["USA", "Canada", "UK"],
         "deep_searches": [], "searches": [], "must_mention": [],
     },
-    "Other Remote": {
-        # Any other remote role (IT, HR, operations...): only used to fill the day after the priority roles
-        "enabled": True, "deep_results": 60, "normal_results": 40, "regions": ["USA"],
-        "deep_searches": ["work from anywhere", "remote worldwide", "remote contractor"],
-        "searches": ["Data Entry", "Recruiter", "HR Coordinator", "Customer Success", "Project Coordinator",
-                     "QA Tester", "Software Developer", "Full Stack Developer", "Data Analyst",
-                     "Operations Coordinator", "Technical Support", "Marketing Coordinator"],
+    "General Remote": {
+        # Any remote role not covered by the other searches (only the hard no's apply)
+        "enabled": True, "deep_results": 0, "normal_results": 40, "regions": ["USA", "Canada", "UK"],
+        "deep_searches": [],
+        "searches": ["Recruiter", "Recruiting Coordinator", "HR Coordinator", "Project Coordinator",
+                     "Operations Coordinator", "Operations Assistant", "Marketing Coordinator", "Marketing Assistant",
+                     "Marketing Specialist", "E-commerce Specialist", "Technical Support", "Medical Billing Specialist",
+                     "Insurance Verification Specialist"],
         "must_mention": [],
     },
     "SimplyHired GHL": {
@@ -104,49 +107,39 @@ CATEGORIES = {
         "enabled": True, "deep_results": 0, "normal_results": 0, "regions": ["USA"],
         "deep_searches": [], "searches": [], "must_mention": [],
     },
-    "Remote Tech Roles": {
+    "Tech Web & Mobile": {
         # Remote tech roles A (high value). Senior / Lead allowed at 1-50 staff. The post must say remote.
-        "enabled": True, "deep_results": 0, "normal_results": 80, "regions": ["USA"], "remote_only": True,
+        "enabled": True, "deep_results": 0, "normal_results": 80, "regions": ["USA", "Canada", "UK"], "remote_only": True,
         "deep_searches": [],
         "searches": ["Full Stack Developer", "Front End Developer", "Back End Developer", "Software Engineer",
                      "Software Developer", "Mobile Developer", "iOS Developer", "Android Developer", "QA Engineer",
                      "DevOps Engineer"],
         "must_mention": [],
     },
-    "Remote Tech Roles B": {
+    "Tech AI & Data": {
         # Remote tech roles B: AI, data and platform roles. Same rules as A.
-        "enabled": True, "deep_results": 0, "normal_results": 80, "regions": ["USA"], "remote_only": True,
+        "enabled": True, "deep_results": 0, "normal_results": 80, "regions": ["USA", "Canada", "UK"], "remote_only": True,
         "deep_searches": [],
         "searches": ["Forward Deployed Engineer", "AI Engineer", "Machine Learning Engineer", "Data Scientist",
                      "Data Engineer", "Data Analyst", "Python Developer", "Node.js Developer", ".NET Developer",
                      "Java Developer", "Solutions Engineer", "GTM Engineer", "Automation Engineer"],
         "must_mention": [],
     },
-    "More Remote Roles": {
-        # More roles that small US companies often hire remotely (only used to fill the day)
-        "enabled": True, "deep_results": 0, "normal_results": 40, "regions": ["USA"],
-        "deep_searches": [],
-        "searches": ["Operations Assistant", "Marketing Assistant", "Marketing Specialist", "E-commerce Specialist",
-                     "Amazon Specialist", "Shopify Developer", "Product Designer", "UI UX Designer",
-                     "Mobile App Developer", "React Developer", "Python Developer", "IT Support Specialist",
-                     "Recruiting Coordinator", "Transaction Coordinator", "Medical Billing Specialist",
-                     "Insurance Verification Specialist"],
-        "must_mention": [],
-    },
     "Worldwide Hiring": {
         # Posts that say the company hires outside the US. Also searched in LinkedIn's "Worldwide" location;
         # those results are kept only when the company's head office is in the US.
-        "enabled": True, "deep_results": 0, "normal_results": 40, "regions": ["USA"],
+        "enabled": True, "deep_results": 0, "normal_results": 40, "regions": ["USA", "Canada", "UK"],
         "deep_searches": [],
         "searches": ["anywhere in the world", "remote global", "remote international", "independent contractor",
-                     "remote LATAM", "remote Philippines", "offshore", "any time zone"],
+                     "remote LATAM", "remote Philippines", "offshore", "any time zone", "work from anywhere",
+                     "remote worldwide", "remote contractor"],
         "must_mention": [],
         "extra_locations": [("Worldwide", "USA")],        # remote filter only, US head office required
     },
     "SEO": {
         # US / UK clients only, so it is searched in those two region groups
         "enabled": True, "deep_results": 80, "normal_results": 40,
-        "regions": ["USA"],
+        "regions": ["USA", "Canada", "UK"],
         "deep_searches": ["SEO Specialist", "SEO Manager"],
         "searches": [
             "SEO Analyst", "SEO Strategist", "Technical SEO", "Local SEO", "SEO Executive",
@@ -178,7 +171,8 @@ CATEGORIES = {
             "Google Ads Specialist", "Meta Ads Specialist", "Facebook Ads Specialist",
             "Paid Social Specialist", "TikTok Ads", "Amazon PPC Specialist",
             "Growth Marketing Manager", "Digital Advertising Specialist",
-            "Digital Marketing Specialist", "Agency Account Coordinator",
+            "Digital Marketing Specialist", "Agency Account Coordinator", "Amazon Ads Specialist",
+            "Amazon Advertising Specialist",
         ],
         "must_mention": [
             "meta ads", "facebook ads", "instagram ads", "google ads", "adwords", "ppc",
@@ -231,7 +225,8 @@ CATEGORIES = {
     "Email Marketing": {
         "enabled": True, "deep_results": 60, "normal_results": 30,
         "deep_searches": ["Email Marketing Specialist"],
-        "searches": ["Email Marketing Coordinator", "Email Marketing Assistant", "Klaviyo Specialist"],
+        "searches": ["Email Marketing Coordinator", "Email Marketing Assistant", "Klaviyo Specialist",
+                     "Klaviyo Email Marketing", "Shopify Email Marketing"],
         "must_mention": ["email marketing", "klaviyo", "mailchimp", "email campaigns", "newsletter", "email automation"],
     },
     "Design & Video": {
@@ -369,7 +364,8 @@ _PLACES = (r"(?:US|U\.S\.?|USA|U\.S\.A\.?|United States|UK|U\.K\.?|United Kingdo
            r"Australia|New Zealand|UAE|Singapore|Ireland|Netherlands|France|Spain|Switzerland|"
            r"Saudi Arabia|Qatar|Malaysia|Hong Kong|South Africa|North America|EST|PST|CST)")
 LOCATION_LOCK_PATTERNS = [
-    re.compile(r"\b(?:strictly\s+)?americans?\s+(?:candidates?|applicants?|citizens?|residents?)\s+only\b", re.I),
+    re.compile(r"\b(?:strictly\s+)?(?:americans?|canadians?|british|uk)\s+(?:candidates?|applicants?|citizens?|residents?)"
+               r"\s+only\b", re.I),
     re.compile(r"\b[Mm]ust\s+(?:be\s+)?(?:currently\s+)?(?:located|based|residing|reside|live|living)\s+(?:in|within)\s+(?:the\s+)?[A-Z]"),
     re.compile(r"\b" + _PLACES + r"[\s-]*(?:based\s+)?(?:residents?|citizens?|candidates?|applicants?|persons?)\s+only\b", re.I),
     re.compile(r"\b(?:only|exclusively)\s+(?:open\s+to|accepting|considering|hiring)\s+(?:candidates|applicants|people|those|individuals)"
@@ -476,14 +472,32 @@ FOREIGN_NAME_RE = re.compile(r"\b(?:xi'?an|shaanxi|shenzhen|guangzhou|shanghai|b
                              re.I)
 
 
-def foreign_company(company_url, company=""):
+CANADA_HQ_RE = re.compile(r"\b(?:canada|ontario|quebec|british columbia|alberta|manitoba|saskatchewan|nova scotia|"
+                          r"new brunswick|newfoundland|prince edward island|toronto|vancouver|montreal|calgary|"
+                          r"ottawa|edmonton|winnipeg|mississauga|halifax|victoria|waterloo|kitchener|hamilton)\b", re.I)
+UK_HQ_RE = re.compile(r"\b(?:united kingdom|england|scotland|wales|northern ireland|london|manchester|birmingham|"
+                      r"leeds|glasgow|edinburgh|bristol|liverpool|sheffield|newcastle|nottingham|leicester|"
+                      r"cardiff|belfast|cambridge|oxford|brighton|reading|southampton|milton keynes)\b", re.I)
+REGION_PAGE = {"Canada": "ca", "UK": "uk"}      # LinkedIn's own-country pages (ca.linkedin.com, uk.linkedin.com)
+
+
+def foreign_company(company_url, company="", region="USA"):
+    """True when the company is based outside the region being searched.
+    USA: US companies. Canada: Canadian or US companies. UK: UK companies."""
     if FOREIGN_NAME_RE.search(str(company or "")):
         return True
     url = str(company_url or "").split("?")[0].rstrip("/")
-    if FOREIGN_PAGE_RE.match(url):
+    m = FOREIGN_PAGE_RE.match(url)
+    if m and m.group(1).lower() != REGION_PAGE.get(region, ""):
         return True
     hq = COMPANY_HQ.get(url, "")
-    return bool(hq and FOREIGN_HQ_RE.search(hq) and not US_HQ_RE.search(hq))
+    if not hq:
+        return False
+    if region == "Canada":
+        return not (CANADA_HQ_RE.search(hq) or US_HQ_RE.search(hq)) and bool(FOREIGN_HQ_RE.search(hq))
+    if region == "UK":
+        return not UK_HQ_RE.search(hq)
+    return bool(FOREIGN_HQ_RE.search(hq) and not US_HQ_RE.search(hq))
 
 
 # Strong "we hire outside the US" signal (lets a plain "Manager" title through at 1-10 staff companies)
@@ -492,7 +506,8 @@ MANAGER_SIGNAL_RE = re.compile(r"work from anywhere|anywhere in the world|worldw
                                r"offshore|overseas|\blatam\b|latin america|philippines", re.I)
 
 # Searches where any outsourceable role counts (only the hard no's apply)
-OPEN_CATEGORIES = {"Other Remote", "More Remote Roles", "Worldwide Hiring", "Remote Tech Roles", "Remote Tech Roles B"}
+OPEN_CATEGORIES = {"General Remote", "Worldwide Hiring", "Tech Web & Mobile", "Tech AI & Data",
+                   "Other Remote", "More Remote Roles"}        # old names kept so older runs still read the same
 
 # Tech roles: "Senior" / "Sr" / "Lead" allowed at 1-50 staff (Director, Head, VP, Principal, Staff stay blocked)
 TECH_TITLE_RE = re.compile(r"developer|engineer|programmer|full[- ]?stack|front[- ]?end|back[- ]?end|devops|"
@@ -921,6 +936,11 @@ REMOTE_WORDS = ["remote", "work from home", "work-from-home", "wfh", "work from 
                 "fully distributed", "distributed team", "telecommute", "telecommuting"]
 
 
+# Canadian provinces and UK nations: a wide area, not a city ("Ontario, Canada", "England, United Kingdom")
+WIDE_AREAS = (r"ontario|quebec|british columbia|alberta|manitoba|saskatchewan|nova scotia|new brunswick|"
+              r"newfoundland and labrador|prince edward island|england|scotland|wales|northern ireland")
+
+
 def decide_work(row, title, desc, page_tag="", remote_hit=False):
     """Work type. Office or hybrid wording always wins (never pitched).
     Remote when ANY of these is true (and no office / hybrid wording):
@@ -943,7 +963,7 @@ def decide_work(row, title, desc, page_tag="", remote_hit=False):
         and text(row.get("site")) != "linkedin"
     # LinkedIn lists remote jobs with a country or wide area ("United States"); on-site / hybrid jobs with a city
     first_part = loc.split(",")[0].strip().lower()
-    state_wide = bool(re.fullmatch(r"(?:" + US_STATES + r")", first_part))       # "California, United States"
+    state_wide = bool(re.fullmatch(r"(?:" + US_STATES + r"|" + WIDE_AREAS + r")", first_part))   # "California, United States"
     city = bool(CITY_LOC_RE.search(loc)) and "remote" not in loc.lower() and not state_wide
     if re.search(r"\bon[- ]?site\b|\bin[- ]office\b|\bin[- ]person\b", title, re.I) and "remote" not in title.lower():
         return "On-site"                       # "Graphic Designer - (On Site)", "Engineer - Onsite - Shiloh IL"
@@ -969,7 +989,8 @@ def decide_work(row, title, desc, page_tag="", remote_hit=False):
 TITLE_PLACE_RE = re.compile(r"[-|(\u2013\u2014]\s*[A-Z][A-Za-z.' ]+,\s*[A-Z]{2}\b")
 
 # "Fremont, CA", "Austin, Texas, United States", "San Francisco Bay Area": a city or metro, not country-wide
-CITY_LOC_RE = re.compile(r"^[^,]+,\s*(?:[A-Z]{2}|[A-Z][a-z]+(?: [A-Z][a-z]+)?)(?:,\s*United States)?$|"
+CITY_LOC_RE = re.compile(r"^[^,]+,\s*(?:[A-Z]{2}|[A-Z][a-z]+(?: [A-Z][a-z]+)?)(?:,\s*(?:United States|Canada|"
+                         r"United Kingdom))?$|"
                          r"(?:metropolitan|metro|bay) area|greater .+ area", re.I)
 
 
@@ -1601,7 +1622,7 @@ def main():
             sh_cat = cat_name == "SimplyHired GHL"
             if sh_cat:
                 terms = [("gohighlevel", 0)]
-            extra_locs = cfg.get("extra_locations", [])
+            extra_locs = cfg.get("extra_locations", []) if region_name == "USA" else []
             for location, short in list(rcfg["locations"]) + list(extra_locs):
                 extra_loc = (location, short) in extra_locs     # e.g. LinkedIn's "Worldwide" location
                 passes = (True,) if cat_name == "Remote Boards" or extra_loc or sh_cat or cfg.get("remote_only") \
@@ -1705,9 +1726,9 @@ def main():
                         if text(row.get("site")) in BOARD_SITES and not us_company(company_url):
                             ex_loc.add(key)                              # remote boards: US companies only
                             continue
-                        if foreign_company(company_url, company) and not sh_cat:
+                        if foreign_company(company_url, company, region_name) and not sh_cat:
                             ex_loc.add(key)                              # company based outside the US
-                            skip_note(row, title, desc, company, cat_name, "Company based outside the US",
+                            skip_note(row, title, desc, company, cat_name, f"Company based outside {region_name}",
                                       remote_pass, size_label)
                             continue
                         if extra_loc and not us_company(company_url):
