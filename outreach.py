@@ -23,14 +23,14 @@ DAILY_TOTAL = 0                          # 0 = no daily limit: every eligible le
 MAX_COMPANY_SIZE = 50                    # founder-led companies: 1 to 50 staff (unknown size ranked last)
 SMALL_COMPANY = 50
 WEEKDAYS_ONLY = True                     # Monday to Friday (Pakistan time)
-REGION_ORDER = {"USA": 1}                # USA only for now
+REGION_ORDER = {"USA": 1, "Canada": 2, "UK": 3}   # all three regions (regions are mixed in the ranking)
 # Role names are labels only: any role that meets the criteria can be pitched (RevOps excluded).
 FIXED_FIRST_ROLE = "CRM Automation"
 DATA_ROLES = ["AI Automation", "Customer Service", "Bookkeeping", "Performance Marketing", "SEO", "Lead Generation",
               "Social Media", "Content Writing", "Email Marketing", "Design & Video", "Website Support"]
 ROLE_RANK = {FIXED_FIRST_ROLE: 1, **{r: i + 2 for i, r in enumerate(DATA_ROLES)}}
 ROLES = list(ROLE_RANK)                  # VA, AI Automation, RevOps: never contacted automatically
-ROLE_REGIONS = {"SEO": ["USA", "UK"]}    # roles limited to certain client regions
+ROLE_REGIONS = {}                        # every role in every region
 GHL_ONLY_FOR_CRM = False                 # CRM Automation = GHL or HubSpot (or other CRM) jobs
 APIFY_ACTOR = "harvestapi~linkedin-company-employees"
 APIFY_MAX_PEOPLE = 40                    # most people looked up in one pass
@@ -241,6 +241,9 @@ ROLE_PRIORITY = [
     ("GHL / CRM", lambda t, c: c == "CRM Automation" and bool(re.search(
         r"\bcrm\b|hubspot|go\s?high\s?level|highlevel|high level|\bghl\b|lead\s?connector|funnel|"
         r"marketing automation", t, re.I))),
+    ("Automation (Zapier, Make, n8n)", None),           # checked in role_tier (needs the job post too)
+    ("Klaviyo Email Marketing", None),
+    ("Amazon PPC", None),
     ("SDR", lambda t, c: bool(re.search(r"sales development|\bsdr\b|\bbdr\b|business development rep", t, re.I))),
     ("SEO", lambda t, c: bool(re.search(r"\bseo\b|search engine", t, re.I))),
     ("Performance Marketer", lambda t, c: bool(re.search(r"performance market|paid (?:media|search|social|ads)|"
@@ -257,8 +260,18 @@ def role_tier(l):
     t, c = str(l.get("title") or ""), str(l.get("category") or "")
     if re.search(r"GHL|HubSpot", str(l.get("priority") or "")):
         return 0                                       # the post names GoHighLevel or HubSpot: top, whatever the title
+    d = t + " " + str(l.get("desc") or "")
+    names = [n for n, _ in ROLE_PRIORITY]
+    if re.search(r"automation|zapier|n8n|make\.com|integromat|workflow|integration|no-?code", t, re.I) and \
+            re.search(r"zapier|\bn8n\b|make\.com|integromat", d, re.I):
+        return names.index("Automation (Zapier, Make, n8n)")
+    if re.search(r"klaviyo|email|retention|lifecycle|\bcrm\b", t, re.I) and re.search(r"klaviyo", d, re.I):
+        return names.index("Klaviyo Email Marketing")
+    if re.search(r"amazon", t, re.I) and not re.search(r"\baws\b|web services", t, re.I) and \
+            re.search(r"\bppc\b|\bads\b|advertis|sponsored", d, re.I):
+        return names.index("Amazon PPC")
     for i, (_, test) in enumerate(ROLE_PRIORITY):
-        if test(t, c):
+        if test and test(t, c):
             return i
     return len(ROLE_PRIORITY)                          # any other qualifying remote role: only to fill the day
 
