@@ -13,18 +13,28 @@ jobs:
       fail-fast: false
       max-parallel: 5        # fewer searches at once, so LinkedIn does not rate-limit us
       matrix:
-        category: ["Other Remote", "CRM Automation", "AI Automation", "SEO", "Performance Marketing", "Customer Service",
-                   "Bookkeeping", "Virtual Assistant", "Lead Generation", "Social Media",
-                   "Content Writing", "Email Marketing", "Design & Video", "Website Support",
-                   "More Remote Roles", "Worldwide Hiring", "SimplyHired GHL",
-                   "Remote Tech Roles", "Remote Tech Roles B"]
-        region: ["USA"]
+        category: ["CRM Automation", "AI Automation", "Email Marketing", "Performance Marketing", "Lead Generation",
+                   "SEO", "Website Support", "Design & Video", "Virtual Assistant", "Customer Service",
+                   "Bookkeeping", "Social Media", "Content Writing", "General Remote", "Worldwide Hiring",
+                   "Tech Web & Mobile", "Tech AI & Data", "SimplyHired GHL"]
+        region: ["USA", "Canada", "UK"]
+        exclude:                 # SimplyHired is USA only
+          - category: "SimplyHired GHL"
+            region: "Canada"
+          - category: "SimplyHired GHL"
+            region: "UK"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install python-jobspy requests langdetect
+      - name: Install tools (tries again if the download drops)
+        run: |
+          for i in 1 2 3 4 5; do
+            pip install --retries 5 --timeout 60 python-jobspy requests langdetect && exit 0
+            echo "Install failed, trying again in 20 seconds ($i of 5)"; sleep 20
+          done
+          exit 1
       - run: python find_leads.py
         env:
           CATEGORY: ${{ matrix.category }}
@@ -50,7 +60,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install requests
+      - name: Install tools (tries again if the download drops)
+        run: |
+          for i in 1 2 3 4 5; do
+            pip install --retries 5 --timeout 60 requests && exit 0
+            echo "Install failed, trying again in 20 seconds ($i of 5)"; sleep 20
+          done
+          exit 1
       - uses: actions/download-artifact@v4
         with:
           pattern: candidates-*
