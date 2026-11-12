@@ -481,6 +481,33 @@ UK_HQ_RE = re.compile(r"\b(?:united kingdom|england|scotland|wales|northern irel
 REGION_PAGE = {"Canada": "ca", "UK": "uk"}      # LinkedIn's own-country pages (ca.linkedin.com, uk.linkedin.com)
 
 
+# ---------- {Years}: the experience a job post asks for ("3+ years"), or "" ----------
+_NUM_WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8}
+_YEARS_RE = re.compile(
+    r"(?:(?:at least|minimum(?: of)?|min\.?|over|more than)\s+)?"
+    r"\b(\d{1,2}|one|two|three|four|five|six|seven|eight)\s*(?:\+|plus)?\s*"
+    r"(?:(?:-|to|\u2013)\s*\d{1,2}\s*\+?\s*)?(?:years?|yrs?)\b(?:\s*\+)?([^.;\n]{0,70})", re.I)
+
+
+def extract_years(text):
+    """'3+ years', '3-5 years', 'at least 2 years', 'two years' of EXPERIENCE -> '3+ years'.
+    Nothing found, 0 years or more than 8 years -> '' (the message then says 'experienced in')."""
+    for m in _YEARS_RE.finditer(str(text or "")):
+        tail = m.group(2).lower()
+        before = str(text)[max(0, m.start() - 40):m.start()].lower()
+        if not re.search(r"experience|\bexp\b|background|track record|working (?:in|with|as)|hands-on|in (?:a|an) ",
+                         tail + " " + before):
+            continue                       # "10 years in business", "a 2-year contract" are not experience
+        if re.search(r"in business|founded|old\b|of age|warranty|contract|guarantee|history", tail):
+            continue
+        n = m.group(1).lower()
+        n = _NUM_WORDS.get(n, None) if not n.isdigit() else int(n)
+        if not n or n > 8:
+            return ""
+        return f"{n}+ years"
+    return ""
+
+
 def foreign_company(company_url, company="", region="USA"):
     """True when the company is based outside the region being searched.
     USA: US companies. Canada: Canadian or US companies. UK: UK companies."""
@@ -1771,6 +1798,7 @@ def main():
                             "title": title,
                             "role": role,
                             "skills": " · ".join(skills),
+                            "years": extract_years(desc),           # {Years} for Version B messages
                             "note": connection_note(company, role, title_category(title) if (widened or sh_cat) else cat_name,
                                                     skills, wtype),
                             "company": company,
