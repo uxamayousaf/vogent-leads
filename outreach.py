@@ -681,6 +681,33 @@ def upwork_leads(today, start_rank):
     return leads
 
 
+# ---------- {Years}: the experience a job post asks for ("3+ years"), or "" ----------
+_NUM_WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8}
+_YEARS_RE = re.compile(
+    r"(?:(?:at least|minimum(?: of)?|min\.?|over|more than)\s+)?"
+    r"\b(\d{1,2}|one|two|three|four|five|six|seven|eight)\s*(?:\+|plus)?\s*"
+    r"(?:(?:-|to|\u2013)\s*\d{1,2}\s*\+?\s*)?(?:years?|yrs?)\b(?:\s*\+)?([^.;\n]{0,70})", re.I)
+
+
+def extract_years(text):
+    """'3+ years', '3-5 years', 'at least 2 years', 'two years' of EXPERIENCE -> '3+ years'.
+    Nothing found, 0 years or more than 8 years -> '' (the message then says 'experienced in')."""
+    for m in _YEARS_RE.finditer(str(text or "")):
+        tail = m.group(2).lower()
+        before = str(text)[max(0, m.start() - 40):m.start()].lower()
+        if not re.search(r"experience|\bexp\b|background|track record|working (?:in|with|as)|hands-on|in (?:a|an) ",
+                         tail + " " + before):
+            continue                       # "10 years in business", "a 2-year contract" are not experience
+        if re.search(r"in business|founded|old\b|of age|warranty|contract|guarantee|history", tail):
+            continue
+        n = m.group(1).lower()
+        n = _NUM_WORDS.get(n, None) if not n.isdigit() else int(n)
+        if not n or n > 8:
+            return ""
+        return f"{n}+ years"
+    return ""
+
+
 def upwork_proposal(lead, first):
     skills = lead["skills"] or ["your GoHighLevel setup"]
     s_txt = skills[0] if len(skills) == 1 else ", ".join(skills[:-1]) + " and " + skills[-1]
@@ -717,6 +744,24 @@ def upwork_role_messages(lead, first):
     if len(note) > 300:
         note = note[:297].rsplit(" ", 1)[0] + "..."
     return [note] + linkedin_messages(l, first)
+
+
+def upwork_b(lead, first):
+    """Version B for an Upwork client (contacted on LinkedIn / email). GHL / HubSpot jobs: '{Tool} Specialist'."""
+    d = str(lead.get("desc") or "") + " " + str(lead.get("title") or "")
+    if CRM_UPWORK_TITLE.search(str(lead.get("title") or "")):
+        tool = "HubSpot" if re.search(r"hubspot", d, re.I) and not re.search(r"high\s?level|\bghl\b", d, re.I) \
+            else "GoHighLevel"
+        role = f"{tool} Specialist"
+        skills = b_skills({"skills": [tool] + [x for x in lead.get("skills") or [] if x]})
+    else:
+        role = re.split(r"\s+[\u2013\u2014|-]\s+|\s*\(|,|:", str(lead.get("title") or ""))[0].strip() or "open role"
+        role = msg_role({"role": role, "title": role, "category": ""})
+        skills = b_skills({"skills": lead.get("skills") or []})
+    if not skills:
+        return None
+    return b_linkedin({"company": lead["company"], "region": lead.get("region"), "desc": lead.get("desc")},
+                      first, role=role, skills=skills)
 
 
 def upwork_messages(lead, first):
@@ -1112,14 +1157,10 @@ def build_email(lead, email, kind, first=""):
     skills = skill_text(lead)
     hi = greeting(email, kind, company, first)
 
-    # Subject line test only (bodies are identical). A2 / B2 so older A / B results never mix in.
-    variant = "A2" if sum(map(ord, company)) % 2 == 0 else "B2"
-    if variant == "A2":
-        subject = f"{role} opening at {company}" if len(role) <= 40 and len(company) <= 40 \
-            else f"Your open role at {company}"
-    else:
-        subject = f"Quick question about your {role} hire" if len(role) <= 40 else \
-            f"Quick question about your hire at {company}"
+    # Version A (the current emails). The old subject test ended on 12 Nov: A keeps "{Role} opening at {Company}".
+    variant = "A3"
+    subject = f"{role} opening at {company}" if len(role) <= 40 and len(company) <= 40 \
+        else f"Your open role at {company}"
 
     fit = (f"We have candidates with experience in {skills} who could be a good fit for what you're "
            f"looking for, at a much lower cost than a local hire.") if skills else \
@@ -1147,6 +1188,99 @@ def build_email(lead, email, kind, first=""):
            f"hired, perhaps we can connect for future openings.\n\nAll the best with the search!\n\n{SIGNATURE}")
     subject = subject[:1].upper() + subject[1:]
     return subject, body1, [fu1, fu2, fu3], variant
+
+
+
+# ---------- Version B (new templates, from 12 Nov 2026) ----------
+# LinkedIn, SimplyHired and Upwork rows: Version B for every lead whose post names 2 skills (else Version A).
+# Emails: A / B alternate (Email Log Variant "A3" / "B3"); a lead keeps its version for the whole sequence.
+HOURS = {"USA": "US hours", "Canada": "Canadian hours", "UK": "UK hours"}
+
+
+def b_skills(lead):
+    """The first 2 skills the job post itself names (tools first), or None (then Version A is used)."""
+    raw = lead.get("skills")
+    items = [str(x).strip() for x in raw] if isinstance(raw, list) else \
+        [x.strip() for x in str(raw or "").split(" · ")]
+    items = [x for x in items if x and x.lower() not in GENERIC_SKILLS]
+    items = [x for x in items if any(ch.isupper() for ch in x)] + [x for x in items if not any(ch.isupper() for ch in x)]
+    out = []
+    for x in items:
+        if x.lower() not in {y.lower() for y in out}:
+            out.append(x)
+    return out[:2] if len(out) >= 2 else None
+
+
+def b_candidate(lead, skills, with_skills=True):
+    """'a candidate with 3+ years of experience in X and Y' / 'a candidate experienced in X and Y'."""
+    years = lead.get("years") or extract_years(lead.get("desc") or "")
+    if not with_skills:
+        return f"a candidate with {years} of experience" if years else "a candidate"
+    if years:
+        return f"a candidate with {years} of experience in {skills[0]} and {skills[1]}"
+    return f"a candidate experienced in {skills[0]} and {skills[1]}"
+
+
+def b_linkedin(lead, first, role=None, skills=None):
+    """Version B LinkedIn sequence: connection note, DM after accept, follow-up 1, follow-up 2 (None if no 2 skills)."""
+    skills = skills or b_skills(lead)
+    if not skills:
+        return None
+    first = fix_case(first)
+    role = role or msg_role(lead)
+    company = clean_company(lead["company"])
+    hours = HOURS.get(lead.get("region"), "US hours")
+    hi = f"Hi {first}," if first else "Hi,"
+    note = f"{hi} saw {company} is hiring {article(role)}. I have {b_candidate(lead, skills)} who could be a fit. " \
+           f"Would be good to connect!"
+    if len(note) > 300:                                   # LinkedIn Premium limit: drop the skills part
+        note = f"{hi} saw {company} is hiring {article(role)}. I have {b_candidate(lead, skills, False)} who could " \
+               f"be a fit. Would be good to connect!"
+    dm = (f"Thanks for connecting, {first}!" if first else "Thanks for connecting!") + \
+        f" About your {role} opening: I have {b_candidate(lead, skills)}, available to start right away and working " \
+        f"{hours}. Hiring remote through Vogent Labs typically costs 40 to 60% less than a local hire, with no " \
+        f"upfront fee. Want me to send the profile?"
+    fu1 = f"{hi} quick note on the {role} role. We recently placed a remote specialist with a US agency, and a " \
+          f"month in they're very happy with the hire. Happy to send over the profile I mentioned, no commitment."
+    fu2 = (f"Hey {first}," if first else "Hi,") + \
+        f" last check on the {role} opening. How it works: you interview freely, pay nothing until your hire " \
+        f"starts, and if they're not the right fit we replace them at no cost. If it's easier to talk it through: " \
+        f"{CALENDLY_URL}. If you've already filled it, no worries at all!"
+    return [note, dm, fu1, fu2]
+
+
+def li_sequence(lead, first):
+    """Message 1-4 for a LinkedIn / SimplyHired row: Version B, or Version A when the post names fewer than 2 skills."""
+    b = b_linkedin(lead, first)
+    if b:
+        return b
+    note, li = named_note(lead.get("note", ""), first), linkedin_messages(lead, first)
+    return [note] + li
+
+
+def b_email(lead, email, kind, first=""):
+    """Version B email 1 + follow-ups 1 and 2 (follow-up 3 stays Version A). None if no 2 skills."""
+    skills = b_skills(lead)
+    if not skills:
+        return None
+    company = clean_company(lead["company"])
+    role = msg_role(lead)
+    hi = greeting(email, kind, company, first)
+    hours = HOURS.get(lead.get("region"), "US hours")
+    subject = f"{role} candidate for {company}" if len(role) <= 40 and len(company) <= 40 else \
+        f"Candidate for your open role at {company}"
+    body1 = (f"{hi}\n\nSaw {company} is hiring {article(role)}. I have {b_candidate(lead, skills)} who can start "
+             f"right away, working {hours}, typically 40 to 60% less than a local hire.\n\n"
+             f"Want me to send the profile over?\n\nBest,\n{SIGNATURE}")
+    fu1 = (f"{hi}\n\nFollowing up on the {role} position. We recently placed a remote specialist with a US agency, "
+           f"and a month in they're very happy with the hire.\n\nThe candidate I mentioned is still available. "
+           f"Want me to send the profile?\n\nBest,\n{SIGNATURE}")
+    fu2 = (f"{hi}\n\nIn case it helps, here's how it works: you interview the candidate freely, pay nothing until "
+           f"they start, and we handle staffing and payroll. If they're not the right fit, we replace them at no "
+           f"cost.\n\nIf it's easier to talk it through, you can pick a time here: {CALENDLY_URL}. Or just reply and "
+           f"I'll send the profile.\n\nBest,\n{SIGNATURE}")
+    subject = subject[:1].upper() + subject[1:]
+    return subject, body1, [fu1, fu2]
 
 
 # ---------- Main ----------
@@ -1208,7 +1342,8 @@ def main():
     for l in sh_leads:
         p = free_founder(l["company"], l.get("people"))
         first = p["first"] if p else ""
-        note, li = named_note(l.get("note", ""), first), linkedin_messages(l, first)
+        msgs = li_sequence(l, first)                  # Version B (Version A if fewer than 2 skills)
+        note, li = msgs[0], msgs[1:]
         sh_rows.append({
             "key": co_key(l["company"]), "date": today.strftime("%Y-%m-%d"), "rank": 0,
             "region": l["region"], "company": l["company"], "company_url": l.get("company_url", ""),
@@ -1236,6 +1371,7 @@ def main():
     # otherwise -> LinkedIn. The channel never decides who gets in: the ranking does.
     cap = email_cap(today) if EMAIL_ENABLED else 0
     rows, linkedin_n, emailed, found_n, looked = [], 0, 0, 0, 0
+    email_turn = 0                                   # Version A / B alternate across email leads
     unknown_n = 0
     for i, l in enumerate(fresh_ranked):
         if DAILY_TOTAL and len(rows) >= DAILY_TOTAL:
@@ -1275,6 +1411,11 @@ def main():
         if email:
             first = p["first"] if (p and kind != "personal") else ""
             subject, body1, fups, variant = build_email(l, email, kind, first)
+            if email_turn % 2 == 1:                       # every second email lead gets Version B
+                b = b_email(l, email, kind, first)
+                if b:
+                    subject, body1, fups, variant = b[0], b[1], b[2] + [fups[2]], "B3"   # follow-up 3 stays A
+            email_turn += 1
             emailed += 1
             rows.append({**base, "channel": "Email", "email": email,
                          "note": body1,           # email 1
@@ -1286,11 +1427,11 @@ def main():
         else:
             first = p["first"] if p else ""
             linkedin_n += 1
-            note, li = named_note(l.get("note", ""), first), linkedin_messages(l, first)
+            msgs = li_sequence(l, first)              # Version B (Version A if the post names fewer than 2 skills)
             if onsite_ask(l):
-                li[0] = onsite_dm(l, first)     # the post says on-site: ask if a remote hire works
-            rows.append({**base, "channel": "LinkedIn", "email": "", "note": note, "followup": li[0],
-                         "messages": [note] + li, "email_status": "", "_lead": l})
+                msgs[1] = onsite_dm(l, first)     # the post says on-site: ask if a remote hire works
+            rows.append({**base, "channel": "LinkedIn", "email": "", "note": msgs[0], "followup": msgs[1],
+                         "messages": msgs, "email_status": "", "_lead": l})
 
     # ----- Apify founder lookup for LinkedIn rows, with whatever budget Upwork left today -----
     left = APIFY_DAILY_BUDGET_USD - upwork_spent
@@ -1303,9 +1444,9 @@ def main():
             p = hits.get(r["company"])
             if not p:
                 continue
-            note, li = named_note(r["_lead"].get("note", ""), p["first"]), linkedin_messages(r["_lead"], p["first"])
+            msgs = li_sequence(r["_lead"], p["first"])
             r.update({"dm_name": p["name"], "dm_url": p["url"], "dm_title": p["title"],
-                      "note": note, "followup": li[0], "messages": [note] + li})
+                      "note": msgs[0], "followup": msgs[1], "messages": msgs})
         print(f"Apify founders: {len(hits)} found with ${left:.2f} left after Upwork")
     # ----- Her account (colleague's LinkedIn via HeyReach): remote tech leads only, never breaks your run -----
     try:
@@ -1337,6 +1478,9 @@ def main():
             first = p["first"] if p else ""
             up_msgs = upwork_messages(u, first) if CRM_UPWORK_TITLE.search(u["title"]) \
                 else upwork_role_messages(u, first)
+            up_b = upwork_b(u, first)                    # Version B when the post names 2 skills
+            if up_b:
+                up_msgs = up_b
             up_rows.append({
                 "key": norm(u["company"]),
                 "date": today.strftime("%Y-%m-%d"),
