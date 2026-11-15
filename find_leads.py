@@ -735,7 +735,8 @@ def is_agency(company, industry, desc, title=""):
         return True                              # hiring / recruiting platforms ("HiredBuddy", "TalentHub")
     if "staffing" in ind or "recruit" in ind or "human resources services" in ind:
         return True
-    if re.search(r"recruit(?:ing|ment) network|executive search firm|staffing firm|placement firm|npaworldwide", c + " " + d):
+    if re.search(r"recruit(?:ing|ment) network|executive search firm|staffing firm|placement firm|npaworldwide|"
+                 r"people solutions|workforce solutions|talent solutions", c + " " + d):
         return True
     if any(re.search(r"\b" + re.escape(b) + r"\b", c) for b in AGENCY_BLOCKLIST):
         return True
