@@ -200,8 +200,8 @@ def eligible(l):
         return False
     if is_nonprofit(l) or norm(l.get("company")) in ("confidential", "confidentialcompany", "stealth", "stealthstartup"):
         return False                       # nonprofits, associations, credit unions, hidden company names
-    if size_min is None and not ("GHL" in str(l.get("priority") or "") or l.get("worldwide") or l.get("tiny_clue")):
-        return False                       # unknown size only with a strong signal (GHL, worldwide, tiny business)
+    if size_min is None and not re.search(r"GHL|HubSpot", str(l.get("priority") or "")):
+        return False                       # unknown size only when the post names GHL or HubSpot (stops big brands)
     return all(str(l.get(k) or "").strip() for k in ("company", "title", "url"))
 
 
@@ -1259,8 +1259,9 @@ def li_sequence(lead, first):
 
 
 def b_email(lead, email, kind, first=""):
-    """Version B email 1 + follow-ups 1 and 2 (follow-up 3 stays Version A). None if no 2 skills."""
-    skills = b_skills(lead)
+    """Version B email 1 + follow-ups 1 and 2 (follow-up 3 stays Version A).
+    When the post names fewer than 2 skills, the role's typical skills fill in, so every email lead is in the test."""
+    skills = b_skills(lead) or b_skills({"skills": skill_list(lead)})
     if not skills:
         return None
     company = clean_company(lead["company"])
