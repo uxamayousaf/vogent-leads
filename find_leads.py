@@ -430,7 +430,14 @@ HARD_LOCAL_TITLE_RE = re.compile(r"american accent|\bw-?2\b|\benterprise\b|\breg
                                  r"ing crew)\b|janitor|housekeep|\bramp (?:agent|operations)|\bmining\b|\bminers?\b|"
                                  r"\bteachers?\b|\beducators?\b|special education|\b[a-z]{2} certified\b|"
                                  r"\binstallers?\b|\binstallation (?:tech|crew)|general labou?r|\blabou?rers?\b|"
-                                 r"personal trainers?|fitness (?:coach|instructor)", re.I)
+                                 r"personal trainers?|fitness (?:coach|instructor)|clearance required|security clearance|secret clearance|"
+                                 r"top secret|\bts/sci\b|\btutors?\b|\btutoring\b|research contributor|desktop support", re.I)
+# Car dealerships: on-site BDC and service desks, they rarely hire remote staff
+DEALER_TITLE_RE = re.compile(r"\bbdc\b", re.I)
+DEALER_NAME_RE = re.compile(r"\b(?:subaru|toyota|honda|nissan|hyundai|mazda|chevrolet|chevy|volkswagen|lexus|acura|"
+                            r"infiniti|jeep|chrysler|dodge|buick|cadillac|gmc|mitsubishi|porsche|audi|bmw|"
+                            r"mercedes[- ]benz|cdjr)\b|\bauto (?:group|mall|plaza)\b|\bmotors\b", re.I)
+
 # Scam-style or junk posts (home-based travel booking, "No Experience Needed", event recruiting ads)
 JUNK_COMPANIES = {"dreamscape", "premierdestinationgroup", "torentify"}
 JUNK_TITLE_RE = re.compile(r"no experience (?:needed|required|necessary)|management trainee|travel associate|let[\u2019']?s (?:connect|meet) at|meet us at|"
@@ -442,7 +449,10 @@ TITLE_TAG_RE = re.compile(r"^(?:100%\s*|fully\s+)?(?:remote|online|virtual|work 
 
 
 def junk_post(title, company):
-    """True for scam-style posts: known junk companies, 'No Experience Needed', titles packed with tags."""
+    """True for scam-style posts: known junk companies, 'No Experience Needed', titles packed with tags.
+    Also car dealerships (on-site BDC / service desks)."""
+    if DEALER_TITLE_RE.search(title) or DEALER_NAME_RE.search(str(company or "")):
+        return True
     co = re.sub(r"(?:llc|inc)$", "", re.sub(r"[^a-z0-9]", "", str(company or "").lower()))
     if co in JUNK_COMPANIES:
         return True
@@ -782,7 +792,7 @@ def is_senior(title):
 
 # Jobs that can't be done remotely, and roles we don't staff
 NOT_REMOTE_TITLE_RE = re.compile(r"\b(retail|in[- ]store|store|cashier|receptionist|front desk|barista|"
-                                 r"warehouse|driver|server|host|hostess)\b", re.I)
+                                 r"warehouse|driver|server|host|hostess)\b|in[- ]office|office[- ]based|\s[-\u2013]\s*office\b|[(,]\s*office\b|\boffice\s*\)", re.I)
 OFF_TARGET_TITLE_RE = re.compile(r"\b(account executive|engineer|strategist|"
                                  r"sales representative|sales rep|account manager|business development manager|"
                                  r"founding|controller)\b", re.I)
@@ -866,7 +876,8 @@ OTHER_BLOCK_RE = re.compile(r"\b(account executives?|sales representatives?|sale
                             r"account manager|controller|"
                             r"founding|business development executive|sales executive|salesperson|salespeople|"
                             r"salesm[ae]n|saleswom[ae]n|"
-                            r"sales consultants?|business development managers?|"
+                            r"sales consultants?|business development managers?|sales directors?|directors? of sales|head of sales|"
+                            r"(?:vp|vice president),? (?:of )?sales|sales managers?|chief revenue officer|"
                             r"(?:hardware|field|repair|bench|maintenance|lab|service|installation) technician)\b", re.I)
 
 
