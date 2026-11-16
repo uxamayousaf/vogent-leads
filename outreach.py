@@ -1372,7 +1372,7 @@ def main():
     # otherwise -> LinkedIn. The channel never decides who gets in: the ranking does.
     cap = email_cap(today) if EMAIL_ENABLED else 0
     rows, linkedin_n, emailed, found_n, looked = [], 0, 0, 0, 0
-    email_turn = 0                                   # Version A / B alternate across email leads
+    email_turn = 0                                   # Version A / B balance: B count minus A count (negative = B behind)
     unknown_n = 0
     for i, l in enumerate(fresh_ranked):
         if DAILY_TOTAL and len(rows) >= DAILY_TOTAL:
@@ -1412,11 +1412,11 @@ def main():
         if email:
             first = p["first"] if (p and kind != "personal") else ""
             subject, body1, fups, variant = build_email(l, email, kind, first)
-            if email_turn % 2 == 1:                       # every second email lead gets Version B
+            if email_turn < 0:                            # B is behind: this lead gets Version B if it can
                 b = b_email(l, email, kind, first)
                 if b:
                     subject, body1, fups, variant = b[0], b[1], b[2] + [fups[2]], "B3"   # follow-up 3 stays A
-            email_turn += 1
+            email_turn += 1 if variant == "B3" else -1    # B count minus A count, kept close to even
             emailed += 1
             rows.append({**base, "channel": "Email", "email": email,
                          "note": body1,           # email 1
