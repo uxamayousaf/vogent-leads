@@ -11,18 +11,91 @@ jobs:
     timeout-minutes: 300
     strategy:
       fail-fast: false
-      max-parallel: 5        # fewer searches at once, so LinkedIn does not rate-limit us
+      max-parallel: 6        # 6 searches at once (more regions since 17 Nov, still gentle on LinkedIn)
       matrix:
         category: ["CRM Automation", "AI Automation", "Email Marketing", "Performance Marketing", "Lead Generation",
                    "SEO", "Website Support", "Design & Video", "Virtual Assistant", "Customer Service",
                    "Bookkeeping", "Social Media", "Content Writing", "General Remote", "Worldwide Hiring",
-                   "Tech Web & Mobile", "Tech AI & Data", "SimplyHired GHL"]
+                   "Tech Web & Mobile", "Tech QA & DevOps", "Tech AI & Data", "SimplyHired GHL"]
         region: ["USA", "Canada", "UK"]
         exclude:                 # SimplyHired is USA only
           - category: "SimplyHired GHL"
             region: "Canada"
           - category: "SimplyHired GHL"
             region: "UK"
+        include:                 # Asia Pacific and Europe: tech searches + worldwide hiring only
+          - category: "Tech Web & Mobile"
+            region: "Singapore"
+          - category: "Tech QA & DevOps"
+            region: "Singapore"
+          - category: "Tech AI & Data"
+            region: "Singapore"
+          - category: "Worldwide Hiring"
+            region: "Singapore"
+          - category: "Tech Web & Mobile"
+            region: "Malaysia"
+          - category: "Tech QA & DevOps"
+            region: "Malaysia"
+          - category: "Tech AI & Data"
+            region: "Malaysia"
+          - category: "Worldwide Hiring"
+            region: "Malaysia"
+          - category: "Tech Web & Mobile"
+            region: "Australia"
+          - category: "Tech QA & DevOps"
+            region: "Australia"
+          - category: "Tech AI & Data"
+            region: "Australia"
+          - category: "Worldwide Hiring"
+            region: "Australia"
+          - category: "Tech Web & Mobile"
+            region: "New Zealand"
+          - category: "Tech QA & DevOps"
+            region: "New Zealand"
+          - category: "Tech AI & Data"
+            region: "New Zealand"
+          - category: "Worldwide Hiring"
+            region: "New Zealand"
+          - category: "Tech Web & Mobile"
+            region: "Ireland"
+          - category: "Tech QA & DevOps"
+            region: "Ireland"
+          - category: "Tech AI & Data"
+            region: "Ireland"
+          - category: "Worldwide Hiring"
+            region: "Ireland"
+          - category: "Tech Web & Mobile"
+            region: "Netherlands"
+          - category: "Tech QA & DevOps"
+            region: "Netherlands"
+          - category: "Tech AI & Data"
+            region: "Netherlands"
+          - category: "Worldwide Hiring"
+            region: "Netherlands"
+          - category: "Tech Web & Mobile"
+            region: "Germany"
+          - category: "Tech QA & DevOps"
+            region: "Germany"
+          - category: "Tech AI & Data"
+            region: "Germany"
+          - category: "Worldwide Hiring"
+            region: "Germany"
+          - category: "Tech Web & Mobile"
+            region: "Sweden"
+          - category: "Tech QA & DevOps"
+            region: "Sweden"
+          - category: "Tech AI & Data"
+            region: "Sweden"
+          - category: "Worldwide Hiring"
+            region: "Sweden"
+          - category: "Tech Web & Mobile"
+            region: "Denmark"
+          - category: "Tech QA & DevOps"
+            region: "Denmark"
+          - category: "Tech AI & Data"
+            region: "Denmark"
+          - category: "Worldwide Hiring"
+            region: "Denmark"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
