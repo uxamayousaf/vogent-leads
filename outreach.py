@@ -23,7 +23,8 @@ DAILY_TOTAL = 0                          # 0 = no daily limit: every eligible le
 MAX_COMPANY_SIZE = 50                    # founder-led companies: 1 to 50 staff (unknown size ranked last)
 SMALL_COMPANY = 50
 WEEKDAYS_ONLY = True                     # Monday to Friday (Pakistan time)
-REGION_ORDER = {"USA": 1, "Canada": 2, "UK": 3}   # all three regions (regions are mixed in the ranking)
+REGION_ORDER = {"USA": 1, "Canada": 2, "UK": 3, "Singapore": 4, "Malaysia": 5, "Australia": 6, "New Zealand": 7,
+                "Ireland": 8, "Netherlands": 9, "Germany": 10, "Sweden": 11, "Denmark": 12}   # regions are mixed in the ranking
 # Role names are labels only: any role that meets the criteria can be pitched (RevOps excluded).
 FIXED_FIRST_ROLE = "CRM Automation"
 DATA_ROLES = ["AI Automation", "Customer Service", "Bookkeeping", "Performance Marketing", "SEO", "Lead Generation",
@@ -95,7 +96,7 @@ APIFY_TOKEN = os.environ.get("APIFY_TOKEN", "").strip()
 PKT = dt.timezone(dt.timedelta(hours=5))
 WORK_ORDER = {"Remote": 0, "Remote (LinkedIn filter)": 1, "Not confirmed": 1, "Remote (check)": 1, "Remote (mentioned)": 1, "Not stated": 2, "Hybrid": 3, "On-site": 4}
 OUTREACH_WORK_TYPES = ["Remote"]   # the post itself says remote (never On-site, Hybrid or unconfirmed)
-EMAIL_DAILY = 30                         # new emails per day (USA first, then Canada, then UK).
+EMAIL_DAILY = 30                         # new emails per day (best-ranked leads first, any region).
                                          # 22 new + 3 follow-ups each = about 80 sends a day, under the 95 cap
 TITLE_RANK = ["founder", "co-founder", "ceo", "chief executive", "owner", "president",
               "managing director", "principal", "partner", "coo", "general manager"]
@@ -216,9 +217,14 @@ NONPROFIT_NAME = re.compile(r"\b(foundation|council|association|society|charity|
 UNKNOWN_SIZE_MAX = 20                    # unknown-size companies per day, and only with a strong signal
 
 
+BIG_HEALTH_RE = re.compile(r"\bupmc\b|\bhospitals?\b|medical cent(?:er|re)|health ?(?:care )?system", re.I)
+
+
 def is_nonprofit(l):
     """Nonprofits and public bodies rarely buy offshore staffing: ranked lower, never removed."""
     site = str(l.get("website") or "").lower()
+    if BIG_HEALTH_RE.search(str(l.get("company") or "")):
+        return True                        # big hospital systems (UPMC, "... Medical Center"): never pitched
     return bool(NONPROFIT_IND.search(str(l.get("industry") or "")) or NONPROFIT_NAME.search(str(l.get("company") or ""))
                 or re.search(r"\.org(?:\.[a-z]{2})?(?:/|$)", site) or re.search(r"\.edu(?:/|$)", site)
                 or "linkedin.com/school/" in str(l.get("company_url") or "").lower())
@@ -241,6 +247,7 @@ ROLE_PRIORITY = [
     ("GHL / CRM", lambda t, c: c == "CRM Automation" and bool(re.search(
         r"\bcrm\b|hubspot|go\s?high\s?level|highlevel|high level|\bghl\b|lead\s?connector|funnel|"
         r"marketing automation", t, re.I))),
+    ("Tech", None),                                    # developers, QA, DevOps, data, AI (checked in role_tier)
     ("Automation (Zapier, Make, n8n)", None),           # checked in role_tier (needs the job post too)
     ("Klaviyo Email Marketing", None),
     ("Amazon PPC", None),
@@ -256,12 +263,23 @@ ROLE_PRIORITY = [
 ]
 
 
+TECH_ROLE_RE = re.compile(r"developer|engineer|programmer|full[- ]?stack|front[- ]?end|back[- ]?end|devops|\bqa\b|"
+                          r"\bsdet\b|\btester\b|data (?:analyst|engineer|scientist)|machine learning|\bml\b|"
+                          r"site reliability|\bsre\b|\bbi developer|power bi", re.I)
+
+
+def is_tech_role(title):
+    return bool(TECH_ROLE_RE.search(str(title or "")))
+
+
 def role_tier(l):
     t, c = str(l.get("title") or ""), str(l.get("category") or "")
     if re.search(r"GHL|HubSpot", str(l.get("priority") or "")):
         return 0                                       # the post names GoHighLevel or HubSpot: top, whatever the title
     d = t + " " + str(l.get("desc") or "")
     names = [n for n, _ in ROLE_PRIORITY]
+    if is_tech_role(t):
+        return names.index("Tech")                     # tech roles come right after GHL / CRM
     if re.search(r"automation|zapier|n8n|make\.com|integromat|workflow|integration|no-?code", t, re.I) and \
             re.search(r"zapier|\bn8n\b|make\.com|integromat", d, re.I):
         return names.index("Automation (Zapier, Make, n8n)")
@@ -949,20 +967,55 @@ SKILL_FIELD = {
 }
 
 
+# Tech tools (from the job post) used in messages for tech roles
+TECH_SKILLS = {"Python", "TypeScript", "JavaScript", "React Native", "React", "Next.js", "Node.js", "Angular", "Vue.js",
+               "Django", "Flask", "FastAPI", "Laravel", "PHP", "Ruby on Rails", "Golang", "Java", ".NET", "C#", "Kotlin",
+               "Swift", "Flutter", "AWS", "Azure", "GCP", "Docker", "Kubernetes", "Terraform", "CI/CD", "PostgreSQL",
+               "MySQL", "MongoDB", "SQL", "GraphQL", "REST APIs", "Selenium", "Cypress", "Playwright", "Jest", "Postman",
+               "Power BI", "Tableau", "Snowflake", "dbt", "Spark", "Airflow", "PyTorch", "TensorFlow", "LLMs", "Pandas",
+               "Salesforce", "Shopify", "WordPress", "HubSpot", "OpenAI", "APIs and webhooks", "Webflow", "Figma"}
+# Role-typical skills are only borrowed when the job title belongs to that field
+# (stops "on-page SEO" for an "Investment Banking AI Research Consultant" found by the SEO search)
+CAT_TITLE_FIT = {
+    "CRM Automation": r"crm|hubspot|high ?level|\bghl\b|automation|funnel|salesforce|zoho|keap|pipeline",
+    "SEO": r"\bseo\b|\bsearch\b",
+    "Performance Marketing": r"\bads\b|ppc|paid|media buy|performance|\bsem\b|acquisition|growth market",
+    "Customer Service": r"customer|support|service|help ?desk|success|client care|client experience|care",
+    "Bookkeeping": r"bookkeep|account|finance|payable|receivable|payroll|billing|controller",
+    "Lead Generation": r"lead|\bsdr\b|\bbdr\b|sales development|business development|appointment|prospect|outreach",
+    "Social Media": r"social|community|content|instagram|tiktok|influencer",
+    "Content Writing": r"writ|content|copy|blog|editor",
+    "Email Marketing": r"email|klaviyo|retention|lifecycle|newsletter",
+    "Design & Video": r"design|graphic|video|motion|creative|editor|animat",
+    "Website Support": r"web|wordpress|shopify|site|webflow|landing",
+    "Virtual Assistant": r"assistant|admin|secretary|coordinator|operations|office|personal",
+}
+
+
+def title_fits(cat, title):
+    rx = CAT_TITLE_FIT.get(cat)
+    return True if rx is None else bool(re.search(rx, str(title or ""), re.I))
+
+
 def skill_list(lead):
     """Skills for messages: the role's own field first (tools first), role-typical skills fill any gap,
-    vague words last. The Leads tab keeps the full list as found."""
+    vague words last. The Leads tab keeps the full list as found.
+    Tech roles: only the tech tools the post names (none found: the message names no skills)."""
     raw = [x.strip() for x in str(lead.get("skills") or "").split(" · ") if x.strip()]
+    if is_tech_role(lead.get("title")):
+        tech = [x for x in raw if x in TECH_SKILLS]
+        return [x for x in tech if any(ch.isupper() for ch in x)] + [x for x in tech if not any(ch.isupper() for ch in x)]
     cat = lead.get("category")
+    fits = title_fits(cat, lead.get("title"))
     field = re.compile(SKILL_FIELD[cat], re.I) if cat in SKILL_FIELD else None
     generic = lambda x: x.lower() in GENERIC_SKILLS
     tools_first = lambda xs: [x for x in xs if any(ch.isupper() for ch in x)] + \
         [x for x in xs if not any(ch.isupper() for ch in x)]
     own = tools_first([x for x in raw if not generic(x) and (field is None or field.search(x))])
-    if field is not None and len(own) < 2:                       # top up with role-typical skills, after the post's own
+    if field is not None and len(own) < 2 and fits:              # top up with role-typical skills, after the post's own
         own += [d for d in DEFAULT_SKILLS.get(cat, []) if d.lower() not in {x.lower() for x in own}]
     if not own:
-        own = tools_first([x for x in raw if not generic(x)]) or list(DEFAULT_SKILLS.get(cat, [])) or \
+        own = tools_first([x for x in raw if not generic(x)]) or (list(DEFAULT_SKILLS.get(cat, [])) if fits else []) or \
             [x for x in raw if generic(x)]
     return own
 
@@ -1194,7 +1247,15 @@ def build_email(lead, email, kind, first=""):
 # ---------- Version B (new templates, from 12 Nov 2026) ----------
 # LinkedIn, SimplyHired and Upwork rows: Version B for every lead whose post names 2 skills (else Version A).
 # Emails: A / B alternate (Email Log Variant "A3" / "B3"); a lead keeps its version for the whole sequence.
-HOURS = {"USA": "US hours", "Canada": "Canadian hours", "UK": "UK hours"}
+HOURS = {"USA": "US hours", "Canada": "Canadian hours", "UK": "UK hours", "Singapore": "Singapore hours",
+         "Malaysia": "Malaysian hours", "Australia": "Australian hours", "New Zealand": "New Zealand hours",
+         "Ireland": "Irish hours", "Netherlands": "European hours", "Germany": "European hours",
+         "Sweden": "European hours", "Denmark": "European hours"}
+
+
+def saving(region):
+    """Malaysia: local salaries are already lower, so no percentage is promised there."""
+    return "far less than a local hire" if region == "Malaysia" else "40 to 60% less than a local hire"
 
 
 def b_skills(lead):
@@ -1203,6 +1264,8 @@ def b_skills(lead):
     items = [str(x).strip() for x in raw] if isinstance(raw, list) else \
         [x.strip() for x in str(raw or "").split(" · ")]
     items = [x for x in items if x and x.lower() not in GENERIC_SKILLS]
+    if lead.get("title") and is_tech_role(lead.get("title")):
+        items = [x for x in items if x in TECH_SKILLS]   # tech roles: only the tech tools the post names
     items = [x for x in items if any(ch.isupper() for ch in x)] + [x for x in items if not any(ch.isupper() for ch in x)]
     out = []
     for x in items:
@@ -1238,7 +1301,7 @@ def b_linkedin(lead, first, role=None, skills=None):
                f"be a fit. Would be good to connect!"
     dm = (f"Thanks for connecting, {first}!" if first else "Thanks for connecting!") + \
         f" About your {role} opening: I have {b_candidate(lead, skills)}, available to start right away and working " \
-        f"{hours}. Hiring remote through Vogent Labs typically costs 40 to 60% less than a local hire, with no " \
+        f"{hours}. Hiring remote through Vogent Labs typically costs {saving(lead.get('region'))}, with no " \
         f"upfront fee. Want me to send the profile?"
     fu1 = f"{hi} quick note on the {role} role. We recently placed a remote specialist with a US agency, and a " \
           f"month in they're very happy with the hire. Happy to send over the profile I mentioned, no commitment."
@@ -1271,7 +1334,7 @@ def b_email(lead, email, kind, first=""):
     subject = f"{role} candidate for {company}" if len(role) <= 40 and len(company) <= 40 else \
         f"Candidate for your open role at {company}"
     body1 = (f"{hi}\n\nSaw {company} is hiring {article(role)}. I have {b_candidate(lead, skills)} who can start "
-             f"right away, working {hours}, typically 40 to 60% less than a local hire.\n\n"
+             f"right away, working {hours}, typically {saving(lead.get('region'))}.\n\n"
              f"Want me to send the profile over?\n\nBest,\n{SIGNATURE}")
     fu1 = (f"{hi}\n\nFollowing up on the {role} position. We recently placed a remote specialist with a US agency, "
            f"and a month in they're very happy with the hire.\n\nThe candidate I mentioned is still available. "
