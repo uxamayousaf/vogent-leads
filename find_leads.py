@@ -40,7 +40,21 @@ REGIONS = {
     "USA": {"enabled": True, "rank": 1, "scale": 1.0, "locations": [("United States", "USA")]},   # normal depth (deeper got us rate-limited)
     "Canada": {"enabled": True, "rank": 2, "scale": 1.0, "locations": [("Canada", "Canada")]},
     "UK": {"enabled": True, "rank": 3, "scale": 1.0, "locations": [("United Kingdom", "UK")]},
+    # Asia Pacific and Europe (from 17 Nov 2026): tech searches + worldwide hiring only, fewer results per search
+    "Singapore": {"enabled": True, "rank": 4, "scale": 0.5, "locations": [("Singapore", "Singapore")]},
+    "Malaysia": {"enabled": True, "rank": 5, "scale": 0.5, "locations": [("Malaysia", "Malaysia")]},
+    "Australia": {"enabled": True, "rank": 6, "scale": 0.5, "locations": [("Australia", "Australia")]},
+    "New Zealand": {"enabled": True, "rank": 7, "scale": 0.5, "locations": [("New Zealand", "New Zealand")]},
+    "Ireland": {"enabled": True, "rank": 8, "scale": 0.5, "locations": [("Ireland", "Ireland")]},
+    "Netherlands": {"enabled": True, "rank": 9, "scale": 0.5, "locations": [("Netherlands", "Netherlands")]},
+    "Germany": {"enabled": True, "rank": 10, "scale": 0.5, "locations": [("Germany", "Germany")]},
+    "Sweden": {"enabled": True, "rank": 11, "scale": 0.5, "locations": [("Sweden", "Sweden")]},
+    "Denmark": {"enabled": True, "rank": 12, "scale": 0.5, "locations": [("Denmark", "Denmark")]},
 }
+CORE_REGIONS = ["USA", "Canada", "UK"]                  # every search runs here
+NEW_REGIONS = ["Singapore", "Malaysia", "Australia", "New Zealand", "Ireland", "Netherlands", "Germany", "Sweden",
+               "Denmark"]                               # tech searches + worldwide hiring only
+ALL_REGIONS = CORE_REGIONS + NEW_REGIONS
 SITES = ["linkedin"]          # LinkedIn only (Indeed, ZipRecruiter and Google Jobs switched off)
 SOURCE_LABELS = {"linkedin": "LinkedIn", "indeed": "Indeed", "zip_recruiter": "ZipRecruiter", "google": "Google Jobs",
                  "remotive": "Remotive", "remoteok": "Remote OK", "wwr": "We Work Remotely", "himalayas": "Himalayas",
@@ -108,27 +122,40 @@ CATEGORIES = {
         "deep_searches": [], "searches": [], "must_mention": [],
     },
     "Tech Web & Mobile": {
-        # Remote tech roles A (high value). Senior / Lead allowed at 1-50 staff. The post must say remote.
-        "enabled": True, "deep_results": 0, "normal_results": 80, "regions": ["USA", "Canada", "UK"], "remote_only": True,
+        # Remote tech roles (high value): web and mobile. Senior / Lead / Staff / Principal allowed at 1-50 staff.
+        "enabled": True, "deep_results": 0, "normal_results": 60, "regions": ALL_REGIONS, "remote_only": True,
         "deep_searches": [],
-        "searches": ["Full Stack Developer", "Front End Developer", "Back End Developer", "Software Engineer",
-                     "Software Developer", "Mobile Developer", "iOS Developer", "Android Developer", "QA Engineer",
-                     "DevOps Engineer"],
+        "searches": ["Full Stack Developer", "Full Stack Engineer", "Front End Developer", "Frontend Engineer",
+                     "Back End Developer", "Backend Engineer", "Software Engineer", "Software Developer",
+                     "React Developer", "Next.js Developer", "Angular Developer", "Vue Developer",
+                     "Node.js Developer", "PHP Laravel Developer", "Ruby on Rails Developer",
+                     "Mobile Developer", "iOS Developer", "Android Developer", "Flutter Developer",
+                     "React Native Developer", "Shopify Developer", "WordPress Developer"],
+        "must_mention": [],
+    },
+    "Tech QA & DevOps": {
+        # Remote tech roles: testing, DevOps, cloud and platform developers. Same rules as above.
+        "enabled": True, "deep_results": 0, "normal_results": 60, "regions": ALL_REGIONS, "remote_only": True,
+        "deep_searches": [],
+        "searches": ["QA Engineer", "QA Automation Engineer", "SDET", "Test Automation Engineer", "Manual QA Tester",
+                     "Software Tester", "DevOps Engineer", "Cloud Engineer", "AWS Engineer",
+                     "Site Reliability Engineer", "Salesforce Developer", "Golang Developer"],
         "must_mention": [],
     },
     "Tech AI & Data": {
-        # Remote tech roles B: AI, data and platform roles. Same rules as A.
-        "enabled": True, "deep_results": 0, "normal_results": 80, "regions": ["USA", "Canada", "UK"], "remote_only": True,
+        # Remote tech roles: AI, data and backend languages. Same rules as above.
+        "enabled": True, "deep_results": 0, "normal_results": 60, "regions": ALL_REGIONS, "remote_only": True,
         "deep_searches": [],
-        "searches": ["Forward Deployed Engineer", "AI Engineer", "Machine Learning Engineer", "Data Scientist",
-                     "Data Engineer", "Data Analyst", "Python Developer", "Node.js Developer", ".NET Developer",
-                     "Java Developer", "Solutions Engineer", "GTM Engineer", "Automation Engineer"],
+        "searches": ["Forward Deployed Engineer", "AI Engineer", "Machine Learning Engineer", "LLM Engineer",
+                     "Data Scientist", "Data Engineer", "Data Analyst", "BI Developer", "Power BI Developer",
+                     "Python Developer", "Python Engineer", "Django Developer", ".NET Developer", "Java Developer",
+                     "Solutions Engineer", "GTM Engineer", "Automation Engineer"],
         "must_mention": [],
     },
     "Worldwide Hiring": {
         # Posts that say the company hires outside the US. Also searched in LinkedIn's "Worldwide" location;
         # those results are kept only when the company's head office is in the US.
-        "enabled": True, "deep_results": 0, "normal_results": 40, "regions": ["USA", "Canada", "UK"],
+        "enabled": True, "deep_results": 0, "normal_results": 40, "regions": ALL_REGIONS,
         "deep_searches": [],
         "searches": ["anywhere in the world", "remote global", "remote international", "independent contractor",
                      "remote LATAM", "remote Philippines", "offshore", "any time zone", "work from anywhere",
@@ -354,6 +381,25 @@ SKILLS = [
     ("Zendesk", ["zendesk"]), ("Freshdesk", ["freshdesk"]), ("Intercom", ["intercom"]), ("Gorgias", ["gorgias"]),
     ("ticketing", ["ticketing", "tickets"]), ("returns and refunds", ["returns", "refunds"]),
     ("order support", ["order status", "order issues", "orders"]),
+    # Tech tools (re: = exact-case pattern, so "react quickly" or "the Go team" are not skills)
+    ("Python", ["python"]), ("TypeScript", ["typescript"]), ("JavaScript", ["javascript"]),
+    ("React Native", ["react native"]), ("React", ["reactjs", "react.js", "re:(?<![.!?] )(?<=[ ,(/])React\\b(?! Native)"]),
+    ("Next.js", ["next.js", "nextjs"]), ("Node.js", ["node.js", "nodejs"]), ("Angular", ["re:\\bAngular(?:JS)?\\b"]),
+    ("Vue.js", ["vue.js", "vuejs", "re:\\bVue\\b"]), ("Django", ["django"]), ("Flask", ["re:\\bFlask\\b"]),
+    ("FastAPI", ["fastapi"]), ("Laravel", ["laravel"]), ("PHP", ["re:\\bPHP\\b"]),
+    ("Ruby on Rails", ["ruby on rails", "re:\\bRails\\b"]), ("Golang", ["golang", "re:\\bGo\\b(?= ?[,/)]| and| or)"]),
+    ("Java", ["re:\\bJava\\b(?!Script| Script)"]), (".NET", ["dotnet", "asp.net", "re:\\.NET\\b"]),
+    ("C#", ["re:\\bC#"]), ("Kotlin", ["kotlin"]), ("Swift", ["re:\\bSwift(?:UI)?\\b"]), ("Flutter", ["flutter"]),
+    ("AWS", ["re:\\bAWS\\b", "amazon web services"]), ("Azure", ["re:\\bAzure\\b"]),
+    ("GCP", ["re:\\bGCP\\b", "google cloud"]), ("Docker", ["docker"]), ("Kubernetes", ["kubernetes", "k8s"]),
+    ("Terraform", ["terraform"]), ("CI/CD", ["ci/cd", "re:\\bCI\\b ?pipelines?"]), ("PostgreSQL", ["postgresql", "postgres"]),
+    ("MySQL", ["mysql"]), ("MongoDB", ["mongodb"]), ("SQL", ["re:\\bSQL\\b"]), ("GraphQL", ["graphql"]),
+    ("REST APIs", ["rest api", "rest apis", "restful"]), ("Selenium", ["selenium"]), ("Cypress", ["re:\\bCypress\\b"]),
+    ("Playwright", ["playwright"]), ("Jest", ["re:\\bJest\\b"]), ("Postman", ["re:\\bPostman\\b"]),
+    ("Power BI", ["power bi"]), ("Tableau", ["tableau"]), ("Snowflake", ["re:\\bSnowflake\\b"]),
+    ("dbt", ["re:\\bdbt\\b"]), ("Spark", ["re:\\b(?:Apache )?Spark\\b"]), ("Airflow", ["airflow"]),
+    ("PyTorch", ["pytorch"]), ("TensorFlow", ["tensorflow"]), ("LLMs", ["llm", "llms", "large language model"]),
+    ("Pandas", ["re:\\bpandas\\b"]),
 ]
 SKILL_REGEXES = None  # built on first use
 
@@ -362,9 +408,11 @@ SKILL_REGEXES = None  # built on first use
 # even if the job is remote ("must be located in the US", "Remote (US only)", "UK residents only").
 _PLACES = (r"(?:US|U\.S\.?|USA|U\.S\.A\.?|United States|UK|U\.K\.?|United Kingdom|EU|Europe|Canada|Germany|"
            r"Australia|New Zealand|UAE|Singapore|Ireland|Netherlands|France|Spain|Switzerland|"
-           r"Saudi Arabia|Qatar|Malaysia|Hong Kong|South Africa|North America|EST|PST|CST)")
+           r"Saudi Arabia|Qatar|Malaysia|Hong Kong|South Africa|North America|Sweden|Denmark|APAC|Asia Pacific|EST|PST|CST)")
 LOCATION_LOCK_PATTERNS = [
-    re.compile(r"\b(?:strictly\s+)?(?:americans?|canadians?|british|uk)\s+(?:candidates?|applicants?|citizens?|residents?)"
+    re.compile(r"\bsingaporeans?\s+(?:and|or|/)\s+(?:singapore\s+)?(?:prs?|permanent residents?)\b", re.I),
+    re.compile(r"\b(?:strictly\s+)?(?:americans?|canadians?|british|uk|singaporeans?|malaysians?|australians?|"
+               r"irish|dutch|german|swedish|danish)\s+(?:candidates?|applicants?|citizens?|residents?)"
                r"\s+only\b", re.I),
     re.compile(r"\b[Mm]ust\s+(?:be\s+)?(?:currently\s+)?(?:located|based|residing|reside|live|living)\s+(?:in|within)\s+(?:the\s+)?[A-Z]"),
     re.compile(r"\b" + _PLACES + r"[\s-]*(?:based\s+)?(?:residents?|citizens?|candidates?|applicants?|persons?)\s+only\b", re.I),
@@ -431,7 +479,9 @@ HARD_LOCAL_TITLE_RE = re.compile(r"american accent|\bw-?2\b|\benterprise\b|\breg
                                  r"\bteachers?\b|\beducators?\b|special education|\b[a-z]{2} certified\b|"
                                  r"\binstallers?\b|\binstallation (?:tech|crew)|general labou?r|\blabou?rers?\b|"
                                  r"personal trainers?|fitness (?:coach|instructor)|clearance required|security clearance|secret clearance|"
-                                 r"top secret|\bts/sci\b|\btutors?\b|\btutoring\b|research contributor|desktop support", re.I)
+                                 r"top secret|\bts/sci\b|\btutors?\b|\btutoring\b|research contributor|desktop support|"
+                                 r"\bai research(?! (?:engineer|scientist))|research consultant|\bai\b[^|]{0,40}\b(?:evaluator|rater)\b|"
+                                 r"interpreter|translator|\bbilingual\b|\bplc\b|\bscada\b|industrial controls|controls (?:engineer|technician)", re.I)
 # Car dealerships: on-site BDC and service desks, they rarely hire remote staff
 DEALER_TITLE_RE = re.compile(r"\bbdc\b", re.I)
 DEALER_NAME_RE = re.compile(r"\b(?:subaru|toyota|honda|nissan|hyundai|mazda|chevrolet|chevy|volkswagen|lexus|acura|"
@@ -442,7 +492,8 @@ DEALER_NAME_RE = re.compile(r"\b(?:subaru|toyota|honda|nissan|hyundai|mazda|chev
 JUNK_COMPANIES = {"dreamscape", "premierdestinationgroup", "torentify"}
 JUNK_TITLE_RE = re.compile(r"no experience (?:needed|required|necessary)|management trainee|travel associate|let[\u2019']?s (?:connect|meet) at|meet us at|"
                            r"visit (?:us|our booth) at|career fair|job fair|hiring event|travel bookings?\b|"
-                           r"data entry[^|]*(?:work from home|\bwfh\b)", re.I)
+                           r"data entry[^|]*(?:work from home|\bwfh\b)|build (?:a|your) schedule|schedule that works|"
+                           r"^(?:work from home|wfh) and\b", re.I)
 TITLE_TAG_RE = re.compile(r"^(?:100%\s*|fully\s+)?(?:remote|online|virtual|work from home|wfh)(?:\s*\(.*\))?$|"
                           r"^entry[- ]level$|^(?:part|full)[- ]time$|^hiring (?:now|immediately)$|^immediate start$|"
                           r"^flexible (?:hours|schedule)$|^weekly pay$|^no experience.*$", re.I)
@@ -478,8 +529,8 @@ FOREIGN_HQ_RE = re.compile(r"\b(?:england|scotland|wales|united kingdom|london|c
                            r"tamil nadu|manila|cebu|makati|quezon|davao|taguig|pasig|lahore|karachi|islamabad|"
                            r"rawalpindi|faisalabad)\b", re.I)
 # A Chinese city in the company name ("Xi'an KINGWELL OILFIELD") is a foreign company too
-FOREIGN_NAME_RE = re.compile(r"\b(?:xi'?an|shaanxi|shenzhen|guangzhou|shanghai|beijing|hangzhou|zhejiang|guangdong)\b",
-                             re.I)
+FOREIGN_NAME_RE = re.compile(r"\b(?:xi'?an|shaanxi|shenzhen|guangzhou|shanghai|beijing|hangzhou|zhejiang|guangdong)\b|"
+                             r"\bprivate limited\b|\bpvt\.?\s*ltd\b|\(pvt\)", re.I)   # Pvt Ltd: South Asian company
 
 
 CANADA_HQ_RE = re.compile(r"\b(?:canada|ontario|quebec|british columbia|alberta|manitoba|saskatchewan|nova scotia|"
@@ -488,7 +539,28 @@ CANADA_HQ_RE = re.compile(r"\b(?:canada|ontario|quebec|british columbia|alberta|
 UK_HQ_RE = re.compile(r"\b(?:united kingdom|england|scotland|wales|northern ireland|london|manchester|birmingham|"
                       r"leeds|glasgow|edinburgh|bristol|liverpool|sheffield|newcastle|nottingham|leicester|"
                       r"cardiff|belfast|cambridge|oxford|brighton|reading|southampton|milton keynes)\b", re.I)
-REGION_PAGE = {"Canada": "ca", "UK": "uk"}      # LinkedIn's own-country pages (ca.linkedin.com, uk.linkedin.com)
+REGION_PAGE = {"Canada": "ca", "UK": "uk", "Singapore": "sg", "Malaysia": "my", "Australia": "au", "New Zealand": "nz",
+               "Ireland": "ie", "Netherlands": "nl", "Germany": "de", "Sweden": "se", "Denmark": "dk"}
+# Head office in the searched country (new regions)
+REGION_HQ_RE = {
+    "Singapore": re.compile(r"\bsingapore\b", re.I),
+    "Malaysia": re.compile(r"\b(?:malaysia|kuala lumpur|selangor|penang|johor|petaling jaya|cyberjaya|putrajaya|"
+                           r"shah alam|subang jaya)\b", re.I),
+    "Australia": re.compile(r"\b(?:australia|sydney|melbourne|brisbane|perth|adelaide|canberra|hobart|darwin|"
+                            r"gold coast|new south wales|queensland|tasmania|victoria)\b", re.I),
+    "New Zealand": re.compile(r"\b(?:new zealand|auckland|wellington|christchurch|hamilton|dunedin|tauranga)\b", re.I),
+    "Ireland": re.compile(r"(?<!northern )\b(?:ireland|dublin|cork|galway|limerick|waterford)\b", re.I),
+    "Netherlands": re.compile(r"\b(?:netherlands|holland|amsterdam|rotterdam|utrecht|the hague|eindhoven|groningen|"
+                              r"haarlem|leiden|delft)\b", re.I),
+    "Germany": re.compile(r"\b(?:germany|deutschland|berlin|munich|m\u00fcnchen|hamburg|frankfurt|cologne|k\u00f6ln|"
+                          r"stuttgart|d\u00fcsseldorf|dusseldorf|leipzig|dresden|bavaria|bayern)\b", re.I),
+    "Sweden": re.compile(r"\b(?:sweden|stockholm|gothenburg|g\u00f6teborg|malm\u00f6|malmo|uppsala)\b", re.I),
+    "Denmark": re.compile(r"\b(?:denmark|copenhagen|k\u00f8benhavn|aarhus|odense|aalborg)\b", re.I),
+}
+# Worldwide-hiring posts may come from a company anywhere, except lower-cost markets (competitors, not buyers)
+LOW_COST_HQ_RE = re.compile(r"\b(?:india|pakistan|bangladesh|sri lanka|philippines|nigeria|vietnam|indonesia|egypt|"
+                            r"kenya|bangalore|bengaluru|mumbai|new delhi|delhi|hyderabad|pune|chennai|kolkata|noida|"
+                            r"gurgaon|gurugram|ahmedabad|manila|cebu|makati|lahore|karachi|islamabad|lagos|dhaka)\b", re.I)
 
 
 # ---------- {Years}: the experience a job post asks for ("3+ years"), or "" ----------
@@ -518,12 +590,23 @@ def extract_years(text):
     return ""
 
 
-def foreign_company(company_url, company="", region="USA"):
+def foreign_company(company_url, company="", region="USA", worldwide=False):
     """True when the company is based outside the region being searched.
-    USA: US companies. Canada: Canadian or US companies. UK: UK companies."""
+    USA: US companies. Canada: Canadian or US companies. UK: UK companies.
+    New regions (Singapore ... Denmark): companies in that country, or, when the post hires worldwide,
+    a company anywhere except lower-cost markets."""
     if FOREIGN_NAME_RE.search(str(company or "")):
         return True
     url = str(company_url or "").split("?")[0].rstrip("/")
+    if region in REGION_HQ_RE:
+        hq = COMPANY_HQ.get(url, "")
+        m = FOREIGN_PAGE_RE.match(url)
+        page = m.group(1).lower() if m else ""
+        if worldwide:
+            return bool(LOW_COST_HQ_RE.search(hq)) or page in ("in", "pk", "bd", "ph", "ng", "lk", "vn", "id", "eg")
+        if page and page != REGION_PAGE[region]:
+            return True
+        return bool(hq) and not REGION_HQ_RE[region].search(hq)
     m = FOREIGN_PAGE_RE.match(url)
     if m and m.group(1).lower() != REGION_PAGE.get(region, ""):
         return True
@@ -546,7 +629,7 @@ MANAGER_SIGNAL_RE = re.compile(r"work from anywhere|anywhere in the world|worldw
 OPEN_CATEGORIES = {"General Remote", "Worldwide Hiring", "Tech Web & Mobile", "Tech AI & Data",
                    "Other Remote", "More Remote Roles"}        # old names kept so older runs still read the same
 
-# Tech roles: "Senior" / "Sr" / "Lead" allowed at 1-50 staff (Director, Head, VP, Principal, Staff stay blocked)
+# Tech roles: "Senior" / "Sr" / "Lead" / "Staff" / "Principal" allowed at 1-50 staff (Director, Head, VP stay blocked)
 TECH_TITLE_RE = re.compile(r"developer|engineer|programmer|full[- ]?stack|front[- ]?end|back[- ]?end|devops|"
                            r"\bqa\b|\bsdet\b|data (?:analyst|engineer|scientist)", re.I)
 
@@ -557,7 +640,7 @@ def on_li_site(row):
 
 def tech_senior(title):
     return bool(TECH_TITLE_RE.search(title) and is_senior(title)
-                and not is_senior(re.sub(r"\b(?:senior|sr\.?|lead)\b", " ", title, flags=re.I)))
+                and not is_senior(re.sub(r"\b(?:senior|sr\.?|lead|staff|principal)\b", " ", title, flags=re.I)))
 
 
 HUBSPOT_RE = re.compile(r"hub\s?spot", re.I)
@@ -750,6 +833,8 @@ def is_agency(company, industry, desc, title=""):
         return True
     if any(re.search(r"\b" + re.escape(b) + r"\b", c) for b in AGENCY_BLOCKLIST):
         return True
+    if re.search(r"^hire|\bhire", c):                 # "Hirevantis", "HireQuest": recruiters
+        return True
     if any(w in c for w in AGENCY_NAME_WORDS):
         return True
     return any(p in d for p in AGENCY_PHRASES)
@@ -881,13 +966,23 @@ OTHER_BLOCK_RE = re.compile(r"\b(account executives?|sales representatives?|sale
                             r"(?:hardware|field|repair|bench|maintenance|lab|service|installation) technician)\b", re.I)
 
 
+LEADER_TITLE_RE = re.compile(r"\b(?:director|head of|vp|vice president|chief|cto|cmo|coo|ceo|cfo)\b", re.I)
+SUPPORT_TITLE_RE = re.compile(r"assistant|coordinator|secretary|\baide\b|support|\bto (?:the )?(?:ceo|director|vp|chief)|"
+                              r"office of", re.I)
+
+
+def leader_title(title):
+    """Director, Head of, VP, Chief: leadership roles we don't fill ("Executive Assistant to the CEO" is fine)."""
+    return bool(LEADER_TITLE_RE.search(title) and not SUPPORT_TITLE_RE.search(title))
+
+
 def hard_no(title, desc="", ghl=False):
     """Roles we never pitch, whatever search found them: in-store, sales reps, interns, gigs, licensed, not a hire.
     ghl=True (the post names GoHighLevel): Account Manager is allowed (client accounts in GHL)."""
     block_title = re.sub(r"\baccount managers?\b", " ", title, flags=re.I) if ghl else title
     return bool(NOT_REMOTE_TITLE_RE.search(title) or OTHER_BLOCK_RE.search(block_title) or NO_BUDGET_TITLE_RE.search(title)
                 or GIG_TITLE_RE.search(title) or HARD_LOCAL_TITLE_RE.search(title)
-                or NOT_A_HIRE_TITLE_RE.search(title) or NOT_A_HIRE_DESC_RE.search(desc))
+                or NOT_A_HIRE_TITLE_RE.search(title) or NOT_A_HIRE_DESC_RE.search(desc) or leader_title(title))
 
 
 def title_category(title):
@@ -977,7 +1072,9 @@ REMOTE_WORDS = ["remote", "work from home", "work-from-home", "wfh", "work from 
 
 # Canadian provinces and UK nations: a wide area, not a city ("Ontario, Canada", "England, United Kingdom")
 WIDE_AREAS = (r"ontario|quebec|british columbia|alberta|manitoba|saskatchewan|nova scotia|new brunswick|"
-              r"newfoundland and labrador|prince edward island|england|scotland|wales|northern ireland")
+              r"newfoundland and labrador|prince edward island|england|scotland|wales|northern ireland|"
+              r"new south wales|queensland|victoria|western australia|south australia|tasmania|"
+              r"australian capital territory|northern territory")
 
 
 def decide_work(row, title, desc, page_tag="", remote_hit=False):
@@ -1110,7 +1207,8 @@ def key_skills(title, desc, limit=3):
     Skips anything already in the job title so the note does not repeat itself."""
     global SKILL_REGEXES
     if SKILL_REGEXES is None:
-        SKILL_REGEXES = [(name, [build_regex(w) for w in words]) for name, words in SKILLS]
+        SKILL_REGEXES = [(name, [re.compile(w[3:]) if w.startswith("re:") else build_regex(w) for w in words])
+                         for name, words in SKILLS]
     source = desc or title
     hits = []
     for name, regs in SKILL_REGEXES:
@@ -1645,8 +1743,8 @@ def main():
         for cat_name, cfg in CATEGORIES.items():
             if not cfg["enabled"] or (ONLY_CATEGORY and cat_name != ONLY_CATEGORY):
                 continue
-            if cfg.get("regions") and region_name not in cfg["regions"]:
-                continue
+            if region_name not in (cfg.get("regions") or CORE_REGIONS):
+                continue                                 # new regions: tech + worldwide hiring only
             ran.append(f"{cat_name} | {region_name}")
             print(f"\n== {cat_name} | {region_name} ==")
             regexes = [build_regex(k) for k in cfg["must_mention"]]
@@ -1765,7 +1863,7 @@ def main():
                         if text(row.get("site")) in BOARD_SITES and not us_company(company_url):
                             ex_loc.add(key)                              # remote boards: US companies only
                             continue
-                        if foreign_company(company_url, company, region_name) and not sh_cat:
+                        if foreign_company(company_url, company, region_name, bool(WORLDWIDE_RE.search(desc))) and not sh_cat:
                             ex_loc.add(key)                              # company based outside the US
                             skip_note(row, title, desc, company, cat_name, f"Company based outside {region_name}",
                                       remote_pass, size_label)
