@@ -121,9 +121,26 @@ def slug(url):
 
 
 def post(payload):
+    """Sends to the Sheet. The Sheet can be slow while it is sending emails (it makes other work wait),
+    so it waits up to 6 minutes per try, tries 3 times in total, and never stops the run if the Sheet stays busy.
+    (3 tries keep the outreach job inside its 30-minute GitHub limit.)
+    Safe to repeat: the Sheet never adds the same company twice."""
     payload["token"] = TOKEN
-    r = requests.post(WEBAPP_URL, json=payload, timeout=180)
-    return r.text
+    text = ""
+    for attempt, wait in enumerate([0, 60, 120]):
+        if wait:
+            print(f"Sheet busy, trying again in {wait}s (try {attempt + 1} of 3)")
+            time.sleep(wait)
+        try:
+            r = requests.post(WEBAPP_URL, json=payload, timeout=360)
+            text = r.text
+            if r.status_code == 200 and not text.lstrip().startswith("<"):   # an error page starts with "<"
+                return text
+            print("Sheet answered:", text[:200])
+        except Exception as e:
+            print("Sheet not reachable:", e)
+    print("Sheet did not answer after 3 tries. Rows are kept safe: re-run this job later.")
+    return text
 
 
 # ---------- 1. Load today's leads from the job search ----------
