@@ -450,7 +450,10 @@ HARD_LOCAL_RE = re.compile(r"american accent|native (?:us|u\.s\.|american) engli
                            r"must be (?:a )?(?:u\.?s\.?|united states|us) citizen|"
                            r"(?:u\.?s\.?|us) citizenship (?:is )?required|security clearance|"
                            r"must (?:live|reside|be located|be based) (?:in|within|near)|local (?:candidates|applicants) only|"
-                           r"must hold an? (?:active |valid )?(?:insurance|real estate|nursing|cpa|state) licen[sc]e", re.I)
+                           r"must hold an? (?:active |valid )?(?:insurance|real estate|nursing|cpa|state) licen[sc]e|"
+                           r"relocat\w*[^.]{0,50}\b(?:expected|required|mandatory|necessary)|(?:expected|required|must|need) to relocate|"
+                           r"\bresidents only\b|\(\s*in [a-z .]{2,30} only\s*\)|\b(?:remote|open to candidates)[^.]{0,25}\bin "
+                           r"(?:canada|the us|the u\.s\.|the uk|texas|california|florida|australia) only\b", re.I)
 # Commission-only, MLM, "partner / co-founder" and paid-task posts are not real hires
 NOT_A_HIRE_TITLE_RE = re.compile(r"commission|co-?founder|\bequity\b|\bpartner\b(?! (?:success|marketing|manager|"
                                  r"relations|account))|paid (?:data )?task|data task|representative needed|\bcloser\b|"
@@ -479,9 +482,14 @@ HARD_LOCAL_TITLE_RE = re.compile(r"american accent|\bw-?2\b|\benterprise\b|\breg
                                  r"\bteachers?\b|\beducators?\b|special education|\b[a-z]{2} certified\b|"
                                  r"\binstallers?\b|\binstallation (?:tech|crew)|general labou?r|\blabou?rers?\b|"
                                  r"personal trainers?|fitness (?:coach|instructor)|clearance required|security clearance|secret clearance|"
-                                 r"top secret|\bts/sci\b|\btutors?\b|\btutoring\b|research contributor|desktop support|"
+                                 r"top secret|\bts/sci\b|security cleared|\bclearance\b|\btutors?\b|\btutoring\b|research contributor|desktop support|"
                                  r"\bai research(?! (?:engineer|scientist))|research consultant|\bai\b[^|]{0,40}\b(?:evaluator|rater)\b|"
                                  r"interpreter|translator|\bbilingual\b|\bplc\b|\bscada\b|industrial controls|controls (?:engineer|technician)", re.I)
+# AI gig marketplaces (named in the post) and "contributor" gigs: not real hires
+AI_GIG_DESC_RE = re.compile(r"\b(?:mercor|outlier ?ai|outlier\.ai|alignerr|micro1|dataannotation|data annotation tech|remotasks|"
+                            r"invisible technologies|handshake ai)\b|"
+                            r"\beligible contributors\b|\bcontributors? must\b|\bapproved country\b|"
+                            r"\b(?:as an?|our) (?:ai )?(?:expert )?contributors?\b", re.I)
 # Car dealerships: on-site BDC and service desks, they rarely hire remote staff
 DEALER_TITLE_RE = re.compile(r"\bbdc\b", re.I)
 DEALER_NAME_RE = re.compile(r"\b(?:subaru|toyota|honda|nissan|hyundai|mazda|chevrolet|chevy|volkswagen|lexus|acura|"
@@ -963,6 +971,7 @@ OTHER_BLOCK_RE = re.compile(r"\b(account executives?|sales representatives?|sale
                             r"salesm[ae]n|saleswom[ae]n|"
                             r"sales consultants?|business development managers?|sales directors?|directors? of sales|head of sales|"
                             r"(?:vp|vice president),? (?:of )?sales|sales managers?|chief revenue officer|"
+                            r"sales development (?:managers?|executives?|leads?)|new business (?:executives?|managers?|development)|"
                             r"(?:hardware|field|repair|bench|maintenance|lab|service|installation) technician)\b", re.I)
 
 
@@ -1077,47 +1086,95 @@ WIDE_AREAS = (r"ontario|quebec|british columbia|alberta|manitoba|saskatchewan|no
               r"australian capital territory|northern territory")
 
 
+# "remote" that is not about where the job is done ("remote sensing", "remote control", "not remote")
+NOT_JOB_REMOTE_RE = re.compile(r"(?<!fully )(?<!100% )(?<!completely )(?<!entirely )\bremote(?:ly)?[- ](?:sensing|sensed|control\w*|pilot|patient|monitor\w*|access|terminal|"
+                               r"units?|desktop|connection|connections|diagnos\w*|technical support|tech support|support|"
+                               r"troubleshoot\w*|devices?|operat\w*|locations?|sites?|areas?|communities|villages|"
+                               r"(?:working )?environment|teams?|employees|workers|colleagues|staff)\b|"
+                               r"\bnot (?:a )?remote\b|\bnon[- ]remote\b|\bno remote\b|\bremote (?:work )?is not\b|"
+                               r"\bno option to work remotely\b|\bwork from home is not possible\b", re.I)
+# Clear phrases that the JOB ITSELF is remote (from 19 Nov the LinkedIn Remote filter + the bare word "remote" is not enough)
+CLEAR_REMOTE_RE = re.compile(
+    r"\b(?:fully|100%|completely|entirely|permanently|full[- ]time|100 percent)[- ]remote\b|"
+    r"\bremote[- ](?:first|only)\b|\bremote[- ]based\b|"
+    r"\b(?:this|the|our) (?:role|position|job|opportunity) is (?:a )?(?:fully |100% |completely )?remote\b|"
+    r"\b(?:is|a|an) (?:fully |100% |completely )?remote (?:role|position|job|opportunity|contract|hire)\b|"
+    r"\bremote (?:role|position|job|opportunity)\b|"
+    r"\b(?:location|work location|workplace|work arrangement|work environment|work type|working arrangements?)\s*[:|-]\s*"
+    r"\[?(?:fully |100% )?remote\b|"
+    r"\bremote\s*\((?:us|u\.s\.|usa|uk|u\.k\.|canada|eu|europe|emea|apac|global|worldwide|anywhere|north america|"
+    r"united states|united kingdom|australia|new zealand|ireland|singapore|malaysia|germany|netherlands|sweden|denmark)|"
+    r"\bremote[,/|\u2013-]\s*(?:us|usa|uk|canada|united states|united kingdom|global|worldwide|anywhere|australia|ireland|"
+    r"europe|eu)\b|"
+    r"\bremote (?:within|from|anywhere|across|in) (?:the )?(?:us|u\.s\.|usa|uk|united states|united kingdom|canada|"
+    r"anywhere|europe|eu|australia|new zealand|ireland|any country|the world|north america|emea|apac)\b|"
+    r"\bwork(?:ing)? from anywhere\b|\banywhere in the world\b|\bremote,? any (?:country|location|time ?zone)\b|"
+    r"\b(?:office|onsite|on-site|hybrid) or (?:fully )?remote(?:ly)?\b|\bor (?:fully )?remote(?:ly)? (?:within|in|from|across)\b|"
+    r"\b[a-z]+ or remote\b(?=[^.]{0,10}(?:full|part|$|\.|,))|"
+    r"\bremote eligible\b|\bpermanent wfh\b|\b(?:fully |100% )?work[- ]from[- ]home (?:role|position|job|opportunity)\b|"
+    r"\bremote/work from home\b|\bdistributed (?:team|company|workforce)\b|\bremote,? (?:full|part)[- ]time\b|"
+    r"\b(?:full|part)[- ]time,? (?:and )?remote\b|\bwork remotely from\b|"
+    r"\(\s*remote\s*\)|remote,? u\.s\.|\b(?:located|live|living|based|work) anywhere in\b|"
+    r"\bopen to (?:fully )?remote (?:candidates|applicants|workers|hires|talent)\b|\bremote,? async\b|"
+    r"\b(?:a|is|this) remote,? (?:\w+,? ){0,2}(?:role|position|job|opportunity)\b|"
+    r"\b(?:primarily|largely|mostly|predominantly) remote\b", re.I)
+# Office wording (always wins over remote wording unless the title or location says Remote)
+CLEAR_ONSITE_RE = re.compile(r"\(\s*on[- ]?site\b|\bon[- ]?site\s*(?:[\u2013\u2014|)]|- |, (?!training|visits?|support|"
+                             r"meetings?|events?|teams?))|\bfull[- ]time,?\s*on[- ]?site\b|\bnot (?:a )?remote\b|"
+                             r"\bbased (?:in|at|out of) our [^.]{0,40}\boffice\b|\bin[- ]office,? (?:monday|mon\b)|"
+                             r"\bwork (?:in|from) (?:the|our) office (?:monday|mon\b|every|daily|five|5)|"
+                             r"\b(?:five|5) days (?:a|per) week (?:in|at) (?:the|our) office|\bno option to work remotely\b|"
+                             r"\bwork from home is not possible\b|\bfull[- ]time in[- ]office\b|\bthis is an? in[- ]person\b", re.I)
+CLEAR_HYBRID_RE = re.compile(r"(?<!not )\bhybrid\b|"
+                             r"\b(?:\d|one|two|three|four)\s*(?:days?|x)\s*(?:a|per|each|/)?\s*(?:week\s*)?"
+                             r"(?:in|at|from|into)\s*(?:the|our)?\s*(?:\w+ )?office|"
+                             r"\b(?:\d|one|two|three|four)\s*(?:days?\s*)?(?:a|per)\s*week\s*(?:in|at)\s*(?:the|our)?\s*"
+                             r"(?:\w+ )?office|\b\d{2}%\s*(?:in[- ]office|in (?:the )?office|on[- ]?site)|"
+                             r"\b(?:\d|one|two|three)\s*(?:work[- ]from[- ]home|wfh|remote)\s*days\b|"
+                             r"\bwork[- ]from[- ]home (?:flexibility|days?) \(?\s*(?:\d|one|two|three)|"
+                             r"\bin (?:the )?office \d days\b|\bwork in the office (?:\d|one|two|three)|"
+                             r"\bmust be able to work in the office\b|\bin[- ]office,? \w+ (?:through|to|-) \w+day", re.I)
+
+
 def decide_work(row, title, desc, page_tag="", remote_hit=False):
-    """Work type. Office or hybrid wording always wins (never pitched).
-    Remote when ANY of these is true (and no office / hybrid wording):
-      LinkedIn's own tag says Remote, the job location says Remote, the title says Remote,
-      the description uses a clear remote phrase, or the site's Remote filter returned it AND the text mentions remote.
-    One vague signal alone -> 'Not confirmed' (Leads tab only, never pitched)."""
+    """Work type (strict, from 19 Nov). Office or hybrid wording always wins (never pitched), unless the title or
+    the job location itself says Remote.
+    Remote only when: the title or job location says Remote, or the post uses a CLEAR phrase that the job is remote
+    ("fully remote", "this is a remote role", "Location: Remote", "Remote (US)" ...).
+    The LinkedIn Remote filter or the bare word "remote" ("remote sensing", "remote team") -> 'Not confirmed' (never pitched).
+    A city location ("Austin, TX, USA", "Dublin, County Dublin, Ireland") without a clear remote phrase -> On-site."""
     if page_tag in ("On-site", "Hybrid"):
         return page_tag
-    d = (title + " " + desc).lower()
-    rem = any(p in d for p in STRONG_REMOTE)
-    on = any(p in d for p in STRONG_ONSITE) or bool(STRONG_ONSITE_RE.search(d))
-    hy = any(p in d for p in STRONG_HYBRID) or (bool(re.search(r"\bhybrid\b", d)) and not rem) or \
-        bool(re.search(r"\d\s*days?\s*(?:a|per)?\s*(?:week\s*)?(?:in|at|from)\s*(?:the|our)?\s*office", d))
-    if hy:
-        return "Hybrid"
-    if on and not rem:
-        return "On-site"
     loc = text(row.get("location"))
     loc_remote = "remote" in loc.lower() or str(row.get("is_remote")).lower() == "true" \
         and text(row.get("site")) != "linkedin"
+    head_remote = loc_remote or "remote" in title.lower() or page_tag == "Remote"
+    d = (title + " " + desc).lower()
+    d_job = NOT_JOB_REMOTE_RE.sub(" ", d)                  # drop "remote sensing", "not remote" ...
+    rem = bool(CLEAR_REMOTE_RE.search(d_job))
+    on = any(p in d for p in STRONG_ONSITE) or bool(STRONG_ONSITE_RE.search(d)) or bool(CLEAR_ONSITE_RE.search(d))
+    hy = any(p in d for p in STRONG_HYBRID) or bool(CLEAR_HYBRID_RE.search(d))
+    if re.search(r"\bon[- ]?site\b|\bin[- ]office\b|\bin[- ]person\b", title, re.I) and "remote" not in title.lower():
+        return "On-site"                       # "Graphic Designer - (On Site)", "Engineer - Onsite - Shiloh IL"
+    if hy and not head_remote:
+        return "Hybrid"                        # hybrid wording wins, even if the post also says "work remotely"
+    if on and not head_remote and not rem:
+        return "On-site"
     # LinkedIn lists remote jobs with a country or wide area ("United States"); on-site / hybrid jobs with a city
     first_part = loc.split(",")[0].strip().lower()
     state_wide = bool(re.fullmatch(r"(?:" + US_STATES + r"|" + WIDE_AREAS + r")", first_part))   # "California, United States"
     city = bool(CITY_LOC_RE.search(loc)) and "remote" not in loc.lower() and not state_wide
-    if re.search(r"\bon[- ]?site\b|\bin[- ]office\b|\bin[- ]person\b", title, re.I) and "remote" not in title.lower():
-        return "On-site"                       # "Graphic Designer - (On Site)", "Engineer - Onsite - Shiloh IL"
-    if page_tag == "Remote" or loc_remote or "remote" in title.lower():
+    if head_remote:
         return "Remote"
     if TITLE_CITY_RE.search(title):
         return "On-site"                       # "Copywriter - NYC", "Data Analyst (Omaha, NE)"
-    if city and rem:
+    if rem:
         return "Remote"                        # a clear phrase ("fully remote") beats the office's city
     if city:
-        return "On-site"                       # a city location without "Remote" in the title: treat as office job
-    says_remote = any(w in d for w in REMOTE_WORDS)
-    if rem:
-        return "Remote"                        # clear phrase in the post ("fully remote", "100% remote"...)
-    if remote_hit and says_remote:
-        return "Remote"                        # LinkedIn's Remote filter AND the post itself mentions remote
+        return "On-site"                       # a city location without a clear remote phrase: treat as office job
+    says_remote = any(w in d_job for w in REMOTE_WORDS)
     if says_remote or remote_hit:
-        return "Not confirmed"                 # one weak signal only: never pitched as remote
+        return "Not confirmed"                 # weak signals only (LinkedIn filter, the word "remote"): never pitched
     return "Not stated"
 
 
@@ -1125,9 +1182,10 @@ def decide_work(row, title, desc, page_tag="", remote_hit=False):
 TITLE_PLACE_RE = re.compile(r"[-|(\u2013\u2014]\s*[A-Z][A-Za-z.' ]+,\s*[A-Z]{2}\b")
 
 # "Fremont, CA", "Austin, Texas, United States", "San Francisco Bay Area": a city or metro, not country-wide
-CITY_LOC_RE = re.compile(r"^[^,]+,\s*(?:[A-Z]{2}|[A-Z][a-z]+(?: [A-Z][a-z]+)?)(?:,\s*(?:United States|Canada|"
-                         r"United Kingdom))?$|"
-                         r"(?:metropolitan|metro|bay) area|greater .+ area", re.I)
+CITY_LOC_RE = re.compile(r"^[^,]+,\s*(?:[A-Z]{2}|[A-Z][a-z]+(?: [A-Z][a-z]+){0,2})(?:,\s*(?:United States|USA|US|Canada|"
+                         r"United Kingdom|UK|Australia|New Zealand|Ireland|Netherlands|Germany|Sweden|Denmark|Singapore|"
+                         r"Malaysia))?$|"
+                         r"(?:metropolitan|metro|bay) area|greater .+ area|^[^,]+ area,", re.I)   # "McLean, VA, USA" too (JobSpy format)
 
 
 TITLE_CITY_RE = re.compile(r"\([^)]*,\s*[A-Z]{2}\)|\b(?:nyc|new york city|los angeles|chicago|san francisco|boston|"
@@ -1817,6 +1875,10 @@ def main():
                         if junk_post(title, company):
                             ex_role.add(key)
                             skip_note(row, title, desc, company, cat_name, "Scam-style / junk post", remote_pass)
+                            continue
+                        if AI_GIG_DESC_RE.search(desc):
+                            ex_role.add(key)
+                            skip_note(row, title, desc, company, cat_name, "AI gig marketplace / contributor gig", remote_pass)
                             continue
                         if text(row.get("site")) not in ("linkedin", "") and not sh_cat and \
                                 not (CRM_TITLE_RE.search(title) or GHL_RE.search(title)):
