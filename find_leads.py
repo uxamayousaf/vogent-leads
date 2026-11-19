@@ -123,7 +123,7 @@ CATEGORIES = {
     },
     "Tech Web & Mobile": {
         # Remote tech roles (high value): web and mobile. Senior / Lead / Staff / Principal allowed at 1-50 staff.
-        "enabled": True, "deep_results": 0, "normal_results": 60, "regions": ALL_REGIONS, "remote_only": True,
+        "enabled": True, "deep_results": 0, "normal_results": 60, "core_results": 80, "regions": ALL_REGIONS, "remote_only": True,
         "deep_searches": [],
         "searches": ["Full Stack Developer", "Full Stack Engineer", "Front End Developer", "Frontend Engineer",
                      "Back End Developer", "Backend Engineer", "Software Engineer", "Software Developer",
@@ -135,7 +135,7 @@ CATEGORIES = {
     },
     "Tech QA & DevOps": {
         # Remote tech roles: testing, DevOps, cloud and platform developers. Same rules as above.
-        "enabled": True, "deep_results": 0, "normal_results": 60, "regions": ALL_REGIONS, "remote_only": True,
+        "enabled": True, "deep_results": 0, "normal_results": 60, "core_results": 80, "regions": ALL_REGIONS, "remote_only": True,
         "deep_searches": [],
         "searches": ["QA Engineer", "QA Automation Engineer", "SDET", "Test Automation Engineer", "Manual QA Tester",
                      "Software Tester", "DevOps Engineer", "Cloud Engineer", "AWS Engineer",
@@ -144,7 +144,7 @@ CATEGORIES = {
     },
     "Tech AI & Data": {
         # Remote tech roles: AI, data and backend languages. Same rules as above.
-        "enabled": True, "deep_results": 0, "normal_results": 60, "regions": ALL_REGIONS, "remote_only": True,
+        "enabled": True, "deep_results": 0, "normal_results": 60, "core_results": 80, "regions": ALL_REGIONS, "remote_only": True,
         "deep_searches": [],
         "searches": ["Forward Deployed Engineer", "AI Engineer", "Machine Learning Engineer", "LLM Engineer",
                      "Data Scientist", "Data Engineer", "Data Analyst", "BI Developer", "Power BI Developer",
@@ -152,14 +152,42 @@ CATEGORIES = {
                      "Solutions Engineer", "GTM Engineer", "Automation Engineer"],
         "must_mention": [],
     },
+    "E-commerce Support": {
+        # Added 19 Nov: Shopify / Amazon store work, mostly remote at small companies
+        "enabled": True, "deep_results": 0, "normal_results": 40, "regions": CORE_REGIONS, "remote_only": True,
+        "deep_searches": [],
+        "searches": ["E-commerce Assistant", "E-commerce Coordinator", "Ecommerce Operations Specialist",
+                     "Shopify Store Assistant", "Amazon Marketplace Specialist", "Amazon Listing Specialist",
+                     "Amazon Seller Central Specialist", "Product Listing Specialist"],
+        "must_mention": [],
+    },
+    "Video & Content": {
+        # Added 19 Nov: video and content roles, mostly remote
+        "enabled": True, "deep_results": 0, "normal_results": 40, "regions": CORE_REGIONS, "remote_only": True,
+        "deep_searches": [],
+        "searches": ["YouTube Video Editor", "Short Form Video Editor", "Reels Editor", "Thumbnail Designer",
+                     "Podcast Editor", "UGC Editor"],
+        "must_mention": [],
+    },
+    "No-Code & CRM Tech": {
+        # Added 19 Nov: no-code builders and CRM platform roles (fit the GHL / CRM and Automation tiers)
+        "enabled": True, "deep_results": 0, "normal_results": 40, "regions": CORE_REGIONS, "remote_only": True,
+        "deep_searches": [],
+        "searches": ["Webflow Developer", "Framer Developer", "Bubble Developer", "No-Code Developer",
+                     "HubSpot Developer", "Salesforce Administrator", "Salesforce Admin"],
+        "must_mention": [],
+    },
     "Worldwide Hiring": {
         # Posts that say the company hires outside the US. Also searched in LinkedIn's "Worldwide" location;
         # those results are kept only when the company's head office is in the US.
-        "enabled": True, "deep_results": 0, "normal_results": 40, "regions": ALL_REGIONS,
+        "enabled": True, "deep_results": 0, "normal_results": 40, "core_results": 60, "regions": ALL_REGIONS,
         "deep_searches": [],
         "searches": ["anywhere in the world", "remote global", "remote international", "independent contractor",
                      "remote LATAM", "remote Philippines", "offshore", "any time zone", "work from anywhere",
-                     "remote worldwide", "remote contractor"],
+                     "remote worldwide", "remote contractor",
+                     # added 19 Nov: more "we hire abroad" wording
+                     "remote Latin America", "remote Eastern Europe", "remote India", "offshore team",
+                     "remote contractor anywhere", "async remote", "employer of record", "distributed team"],
         "must_mention": [],
         "extra_locations": [("Worldwide", "USA")],        # remote filter only, US head office required
     },
@@ -310,7 +338,7 @@ AGENCY_NAME_WORDS = [
 ]
 AGENCY_PHRASES = [
     "our client", "on behalf of our client", "on behalf of a client",
-    "for a client of ours", "client of ours",
+    "for a client of ours", "client of ours", "my client", "on behalf of my client",
 ]
 
 # Extra agency signals, used to keep the OUTREACH list strictly to direct employers
@@ -460,7 +488,8 @@ NOT_A_HIRE_TITLE_RE = re.compile(r"commission|co-?founder|\bequity\b|\bpartner\b
                                  r"high[- ]ticket|financial (?:professional|advisor|representative)|insurance (?:agent|producer)",
                                  re.I)
 NOT_A_HIRE_DESC_RE = re.compile(r"commission[- ]only|commission[- ]based|100% commission|straight commission|"
-                                r"equity[- ]only|unpaid|no base (?:pay|salary)|uncapped commission", re.I)
+                                r"equity[- ]only|unpaid|no base (?:pay|salary)|uncapped commission|independent business opportunity|"
+                                r"self[- ]employed[^.\n]{0,40}(?:opportunity|commission|business owner)", re.I)
 # IT services firms that resell staff to their clients
 IT_STAFFING_NAME_RE = re.compile(r"\b(?:it solutions|infotech|info tech|technologies|tech solutions|softech|"
                                  r"consulting|consultancy|staffing)\b", re.I)
@@ -635,6 +664,7 @@ MANAGER_SIGNAL_RE = re.compile(r"work from anywhere|anywhere in the world|worldw
 
 # Searches where any outsourceable role counts (only the hard no's apply)
 OPEN_CATEGORIES = {"General Remote", "Worldwide Hiring", "Tech Web & Mobile", "Tech QA & DevOps", "Tech AI & Data",
+                   "E-commerce Support", "Video & Content", "No-Code & CRM Tech",
                    "Other Remote", "More Remote Roles"}        # old names kept so older runs still read the same
 
 # Tech roles: "Senior" / "Sr" / "Lead" / "Staff" / "Principal" allowed at 1-50 staff (Director, Head, VP stay blocked)
@@ -1133,7 +1163,8 @@ CLEAR_HYBRID_RE = re.compile(r"(?<!not )\bhybrid\b|"
                              r"\b(?:\d|one|two|three)\s*(?:work[- ]from[- ]home|wfh|remote)\s*days\b|"
                              r"\bwork[- ]from[- ]home (?:flexibility|days?) \(?\s*(?:\d|one|two|three)|"
                              r"\bin (?:the )?office \d days\b|\bwork in the office (?:\d|one|two|three)|"
-                             r"\bmust be able to work in the office\b|\bin[- ]office,? \w+ (?:through|to|-) \w+day", re.I)
+                             r"\bmust be able to work in the office\b|\bspend(?:ing)? (?:some |regular )?time in (?:the|our) office\b|"
+                             r"\boffice attendance (?:is )?(?:required|expected)\b|\bin[- ]office,? \w+ (?:through|to|-) \w+day", re.I)
 
 
 def decide_work(row, title, desc, page_tag="", remote_hit=False):
@@ -1156,6 +1187,9 @@ def decide_work(row, title, desc, page_tag="", remote_hit=False):
     hy = any(p in d for p in STRONG_HYBRID) or bool(CLEAR_HYBRID_RE.search(d))
     if re.search(r"\bon[- ]?site\b|\bin[- ]office\b|\bin[- ]person\b", title, re.I) and "remote" not in title.lower():
         return "On-site"                       # "Graphic Designer - (On Site)", "Engineer - Onsite - Shiloh IL"
+    if re.search(r"\b(?:\d|one|two|three|four)\s*(?:days?|x)\s*(?:a week |per week |pw |/ ?week )?(?:on[- ]?site|in[- ]office|"
+                 r"in (?:the )?office)", title, re.I):
+        return "Hybrid"                        # "Dublin/Remote (2 days onsite pw)": the title itself says hybrid
     if hy and not head_remote:
         return "Hybrid"                        # hybrid wording wins, even if the post also says "work remotely"
     if on and not head_remote and not rem:
@@ -1808,6 +1842,8 @@ def main():
             regexes = [build_regex(k) for k in cfg["must_mention"]]
             deep_n = max(10, int(cfg["deep_results"] * rcfg["scale"]))
             normal_n = max(10, int(cfg["normal_results"] * rcfg["scale"]))
+            if region_name in CORE_REGIONS and cfg.get("core_results"):
+                normal_n = cfg["core_results"]               # more results in USA, Canada, UK (best groups)
             terms = [(t, deep_n) for t in cfg["deep_searches"] if not is_senior(t)] + \
                     [(t, normal_n) for t in cfg["searches"]
                      if not is_senior(t) or crm_manager_title(t, cat_name)]   # "Manager" only for CRM
