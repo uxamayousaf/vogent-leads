@@ -16,7 +16,8 @@ jobs:
         category: ["CRM Automation", "AI Automation", "Email Marketing", "Performance Marketing", "Lead Generation",
                    "SEO", "Website Support", "Design & Video", "Virtual Assistant", "Customer Service",
                    "Bookkeeping", "Social Media", "Content Writing", "General Remote", "Worldwide Hiring",
-                   "Tech Web & Mobile", "Tech QA & DevOps", "Tech AI & Data", "SimplyHired GHL"]
+                   "Tech Web & Mobile", "Tech QA & DevOps", "Tech AI & Data", "SimplyHired GHL",
+                   "E-commerce Support", "Video & Content", "No-Code & CRM Tech"]   # last 3 added 19 Nov (USA, Canada, UK)
         region: ["USA", "Canada", "UK"]
         exclude:                 # SimplyHired is USA only
           - category: "SimplyHired GHL"
