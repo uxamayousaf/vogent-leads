@@ -11,28 +11,29 @@ jobs:
     timeout-minutes: 300
     strategy:
       fail-fast: false
-      max-parallel: 6        # 6 searches at once (more regions since 17 Nov, still gentle on LinkedIn)
+      max-parallel: 10       # 10 searches at once (about 200 searches since 22 Nov; the run starts at 12 AM)
       matrix:
         category: ["CRM Automation", "AI Automation", "Email Marketing", "Performance Marketing", "Lead Generation",
                    "SEO", "Website Support", "Design & Video", "Virtual Assistant", "Customer Service",
                    "Bookkeeping", "Social Media", "Content Writing", "General Remote", "Worldwide Hiring",
-                   "Tech Web & Mobile", "Tech QA & DevOps", "Tech AI & Data", "SimplyHired GHL",
-                   "E-commerce Support", "Video & Content", "No-Code & CRM Tech"]   # last 3 added 19 Nov (USA, Canada, UK)
-        region: ["USA", "Canada", "UK"]
+                   "Tech Web & Mobile", "Tech QA & DevOps", "Tech AI & Data", "SimplyHired GHL", "E-commerce Support",
+                   "Video & Content", "No-Code & CRM Tech", "AI & Automation", "Remote Roles", "Design, Product & Delivery",
+                   "Small Business Marketing"]
+        region: ["USA", "Canada", "UK", "Australia", "New Zealand", "Ireland", "Singapore"]   # English-speaking markets: every search
         exclude:                 # SimplyHired is USA only
           - category: "SimplyHired GHL"
             region: "Canada"
           - category: "SimplyHired GHL"
             region: "UK"
-        include:                 # Asia Pacific and Europe: tech searches + worldwide hiring only
-          - category: "Tech Web & Mobile"
+          - category: "SimplyHired GHL"
+            region: "Australia"
+          - category: "SimplyHired GHL"
+            region: "New Zealand"
+          - category: "SimplyHired GHL"
+            region: "Ireland"
+          - category: "SimplyHired GHL"
             region: "Singapore"
-          - category: "Tech QA & DevOps"
-            region: "Singapore"
-          - category: "Tech AI & Data"
-            region: "Singapore"
-          - category: "Worldwide Hiring"
-            region: "Singapore"
+        include:                 # Malaysia and Europe: tech, worldwide hiring and AI & Automation only
           - category: "Tech Web & Mobile"
             region: "Malaysia"
           - category: "Tech QA & DevOps"
@@ -41,30 +42,8 @@ jobs:
             region: "Malaysia"
           - category: "Worldwide Hiring"
             region: "Malaysia"
-          - category: "Tech Web & Mobile"
-            region: "Australia"
-          - category: "Tech QA & DevOps"
-            region: "Australia"
-          - category: "Tech AI & Data"
-            region: "Australia"
-          - category: "Worldwide Hiring"
-            region: "Australia"
-          - category: "Tech Web & Mobile"
-            region: "New Zealand"
-          - category: "Tech QA & DevOps"
-            region: "New Zealand"
-          - category: "Tech AI & Data"
-            region: "New Zealand"
-          - category: "Worldwide Hiring"
-            region: "New Zealand"
-          - category: "Tech Web & Mobile"
-            region: "Ireland"
-          - category: "Tech QA & DevOps"
-            region: "Ireland"
-          - category: "Tech AI & Data"
-            region: "Ireland"
-          - category: "Worldwide Hiring"
-            region: "Ireland"
+          - category: "AI & Automation"
+            region: "Malaysia"
           - category: "Tech Web & Mobile"
             region: "Netherlands"
           - category: "Tech QA & DevOps"
@@ -72,6 +51,8 @@ jobs:
           - category: "Tech AI & Data"
             region: "Netherlands"
           - category: "Worldwide Hiring"
+            region: "Netherlands"
+          - category: "AI & Automation"
             region: "Netherlands"
           - category: "Tech Web & Mobile"
             region: "Germany"
@@ -80,6 +61,8 @@ jobs:
           - category: "Tech AI & Data"
             region: "Germany"
           - category: "Worldwide Hiring"
+            region: "Germany"
+          - category: "AI & Automation"
             region: "Germany"
           - category: "Tech Web & Mobile"
             region: "Sweden"
@@ -88,6 +71,8 @@ jobs:
           - category: "Tech AI & Data"
             region: "Sweden"
           - category: "Worldwide Hiring"
+            region: "Sweden"
+          - category: "AI & Automation"
             region: "Sweden"
           - category: "Tech Web & Mobile"
             region: "Denmark"
@@ -96,6 +81,8 @@ jobs:
           - category: "Tech AI & Data"
             region: "Denmark"
           - category: "Worldwide Hiring"
+            region: "Denmark"
+          - category: "AI & Automation"
             region: "Denmark"
     steps:
       - uses: actions/checkout@v4
