@@ -43,8 +43,8 @@ REGIONS = {
     # Asia Pacific and Europe (from 17 Nov 2026): tech searches + worldwide hiring only, fewer results per search
     "Singapore": {"enabled": True, "rank": 4, "scale": 0.5, "locations": [("Singapore", "Singapore")]},
     "Malaysia": {"enabled": True, "rank": 5, "scale": 0.5, "locations": [("Malaysia", "Malaysia")]},
-    "Australia": {"enabled": True, "rank": 6, "scale": 0.5, "locations": [("Australia", "Australia")]},
-    "New Zealand": {"enabled": True, "rank": 7, "scale": 0.5, "locations": [("New Zealand", "New Zealand")]},
+    "Australia": {"enabled": True, "rank": 6, "scale": 1.0, "locations": [("Australia", "Australia")]},
+    "New Zealand": {"enabled": True, "rank": 7, "scale": 1.0, "locations": [("New Zealand", "New Zealand")]},
     "Ireland": {"enabled": True, "rank": 8, "scale": 0.5, "locations": [("Ireland", "Ireland")]},
     "Netherlands": {"enabled": True, "rank": 9, "scale": 0.5, "locations": [("Netherlands", "Netherlands")]},
     "Germany": {"enabled": True, "rank": 10, "scale": 0.5, "locations": [("Germany", "Germany")]},
@@ -55,6 +55,8 @@ CORE_REGIONS = ["USA", "Canada", "UK"]                  # every search runs here
 NEW_REGIONS = ["Singapore", "Malaysia", "Australia", "New Zealand", "Ireland", "Netherlands", "Germany", "Sweden",
                "Denmark"]                               # tech searches + worldwide hiring only
 ALL_REGIONS = CORE_REGIONS + NEW_REGIONS
+# English-speaking markets: every role group runs here (from 22 Nov; Malaysia and Europe keep tech + worldwide only)
+ENGLISH_REGIONS = CORE_REGIONS + ["Australia", "New Zealand", "Ireland", "Singapore"]
 SITES = ["linkedin"]          # LinkedIn only (Indeed, ZipRecruiter and Google Jobs switched off)
 SOURCE_LABELS = {"linkedin": "LinkedIn", "indeed": "Indeed", "zip_recruiter": "ZipRecruiter", "google": "Google Jobs",
                  "remotive": "Remotive", "remoteok": "Remote OK", "wwr": "We Work Remotely", "himalayas": "Himalayas",
@@ -107,7 +109,7 @@ CATEGORIES = {
     },
     "General Remote": {
         # Any remote role not covered by the other searches (only the hard no's apply)
-        "enabled": True, "deep_results": 0, "normal_results": 40, "regions": ["USA", "Canada", "UK"],
+        "enabled": True, "deep_results": 0, "normal_results": 40, "regions": ENGLISH_REGIONS,
         "deep_searches": [],
         "searches": ["Recruiter", "Recruiting Coordinator", "HR Coordinator", "Project Coordinator",
                      "Operations Coordinator", "Operations Assistant", "Marketing Coordinator", "Marketing Assistant",
@@ -154,7 +156,7 @@ CATEGORIES = {
     },
     "E-commerce Support": {
         # Added 19 Nov: Shopify / Amazon store work, mostly remote at small companies
-        "enabled": True, "deep_results": 0, "normal_results": 40, "regions": CORE_REGIONS, "remote_only": True,
+        "enabled": True, "deep_results": 0, "normal_results": 40, "regions": ENGLISH_REGIONS, "remote_only": True,
         "deep_searches": [],
         "searches": ["E-commerce Assistant", "E-commerce Coordinator", "Ecommerce Operations Specialist",
                      "Shopify Store Assistant", "Amazon Marketplace Specialist", "Amazon Listing Specialist",
@@ -163,7 +165,7 @@ CATEGORIES = {
     },
     "Video & Content": {
         # Added 19 Nov: video and content roles, mostly remote
-        "enabled": True, "deep_results": 0, "normal_results": 40, "regions": CORE_REGIONS, "remote_only": True,
+        "enabled": True, "deep_results": 0, "normal_results": 40, "regions": ENGLISH_REGIONS, "remote_only": True,
         "deep_searches": [],
         "searches": ["YouTube Video Editor", "Short Form Video Editor", "Reels Editor", "Thumbnail Designer",
                      "Podcast Editor", "UGC Editor"],
@@ -171,10 +173,49 @@ CATEGORIES = {
     },
     "No-Code & CRM Tech": {
         # Added 19 Nov: no-code builders and CRM platform roles (fit the GHL / CRM and Automation tiers)
-        "enabled": True, "deep_results": 0, "normal_results": 40, "regions": CORE_REGIONS, "remote_only": True,
+        "enabled": True, "deep_results": 0, "normal_results": 40, "regions": ENGLISH_REGIONS, "remote_only": True,
         "deep_searches": [],
         "searches": ["Webflow Developer", "Framer Developer", "Bubble Developer", "No-Code Developer",
                      "HubSpot Developer", "Salesforce Administrator", "Salesforce Admin"],
+        "must_mention": [],
+    },
+    "AI & Automation": {
+        # Added 22 Nov: AI and automation builders (high demand, easy to outsource)
+        "enabled": True, "deep_results": 0, "normal_results": 40, "regions": ALL_REGIONS, "remote_only": True,
+        "deep_searches": [],
+        "searches": ["AI Automation Engineer", "Workflow Automation Engineer", "n8n Developer", "Zapier Developer",
+                     "Make.com Developer", "AI Agent Developer", "Integration Engineer", "RPA Developer",
+                     "Power Automate Developer", "Chatbot Developer", "Voice AI Developer", "AI Developer"],
+        "must_mention": [],
+    },
+    "Remote Roles": {
+        # Added 22 Nov: everyday roles searched with the word "Remote" (brings back more truly remote posts)
+        "enabled": True, "deep_results": 0, "normal_results": 40, "regions": ENGLISH_REGIONS, "remote_only": True,
+        "deep_searches": [],
+        "searches": ["Remote Executive Assistant", "Remote Administrative Assistant", "Remote Operations Coordinator",
+                     "Remote Project Coordinator", "Remote Marketing Coordinator", "Remote Recruiter",
+                     "Remote Talent Sourcer", "Remote Customer Success", "Remote Customer Support",
+                     "Remote Data Analyst", "Remote Bookkeeper", "Remote Accountant", "Remote Graphic Designer",
+                     "Remote Web Designer", "Remote UI UX Designer", "Remote Video Editor", "Remote Content Writer",
+                     "Remote Copywriter", "Remote SEO Specialist", "Remote Social Media Coordinator"],
+        "must_mention": [],
+    },
+    "Design, Product & Delivery": {
+        # Added 22 Nov: design, product and delivery roles small teams outsource
+        "enabled": True, "deep_results": 0, "normal_results": 40, "regions": ENGLISH_REGIONS, "remote_only": True,
+        "deep_searches": [],
+        "searches": ["UI UX Designer", "Product Designer", "Web Designer", "Scrum Master", "Product Owner",
+                     "Technical Writer", "QA Analyst", "Implementation Specialist", "Customer Success Specialist",
+                     "Talent Sourcer", "Data Entry Specialist"],
+        "must_mention": [],
+    },
+    "Small Business Marketing": {
+        # Added 22 Nov: everyday marketing every small business needs (hard to find cheap locally)
+        "enabled": True, "deep_results": 0, "normal_results": 40, "regions": ENGLISH_REGIONS, "remote_only": True,
+        "deep_searches": [],
+        "searches": ["Digital Marketing Assistant", "Digital Marketing Coordinator", "Marketing Generalist",
+                     "Google Business Profile", "Facebook Ads Specialist", "Content Creator", "CRM Coordinator",
+                     "Marketing Operations Coordinator", "Social Media Assistant"],
         "must_mention": [],
     },
     "Worldwide Hiring": {
@@ -194,7 +235,7 @@ CATEGORIES = {
     "SEO": {
         # US / UK clients only, so it is searched in those two region groups
         "enabled": True, "deep_results": 80, "normal_results": 40,
-        "regions": ["USA", "Canada", "UK"],
+        "regions": ENGLISH_REGIONS,
         "deep_searches": ["SEO Specialist", "SEO Manager"],
         "searches": [
             "SEO Analyst", "SEO Strategist", "Technical SEO", "Local SEO", "SEO Executive",
@@ -330,7 +371,7 @@ AGENCY_BLOCKLIST = [
     "belay", "boldly", "wing assistant", "prialto", "time etc", "virtual staff finder",
     "hire overseas", "remote staff", "outsource", "upwork", "fiverr",
     "teleperformance", "concentrix", "alorica", "ttec", "sitel", "foundever",
-    "hays", "reed", "michael page", "page group",
+    "hays", "reed", "michael page", "page group", "talution", "presales collective",
 ]
 AGENCY_NAME_WORDS = [
     "staffing", "recruit", "talent", "placement", "workforce", "personnel",
@@ -482,10 +523,26 @@ HARD_LOCAL_RE = re.compile(r"american accent|native (?:us|u\.s\.|american) engli
                            r"relocat\w*[^.]{0,50}\b(?:expected|required|mandatory|necessary)|(?:expected|required|must|need) to relocate|"
                            r"\bresidents only\b|\(\s*in [a-z .]{2,30} only\s*\)|\b(?:remote|open to candidates)[^.]{0,25}\bin "
                            r"(?:canada|the us|the u\.s\.|the uk|texas|california|florida|australia) only\b", re.I)
+# Remote, but only for people in one city ("remote/work-from-home in Fort Worth, Texas", "Remote in Charlotte, NC")
+CITY_LOCK_RE = re.compile(r"\b(?:[Rr]emote|REMOTE|[Ww]ork[- ]from[- ]home|WFH)\b[^.\n]{0,25}\bin [A-Z][a-z]+(?: [A-Z][a-z]+){0,2},"
+                          r"\s*(?:[A-Z]{2}\b|[A-Z][a-z]+)")
+# Only candidates in certain states, or only citizens / permanent residents
+STATE_LOCK_RE = re.compile(r"\b(?:open to|only|accepting|considering) (?:candidates|applicants|people)\s+(?:who are |currently )?"
+                           r"(?:based|located|residing|living) in (?:the )?(?:states? of )?(?:alabama|alaska|arizona|arkansas|"
+                           r"california|colorado|connecticut|delaware|florida|georgia|hawaii|idaho|illinois|indiana|iowa|kansas|"
+                           r"kentucky|louisiana|maine|maryland|massachusetts|michigan|minnesota|mississippi|missouri|montana|"
+                           r"nebraska|nevada|new hampshire|new jersey|new mexico|new york|north carolina|north dakota|ohio|"
+                           r"oklahoma|oregon|pennsylvania|rhode island|south carolina|south dakota|tennessee|texas|utah|vermont|"
+                           r"virginia|washington|west virginia|wisconsin|wyoming|ontario|quebec|british columbia|alberta|"
+                           r"new south wales|victoria|queensland|the tri-state|the bay area|greater \w+)\b|"
+                           r"\bonly candidates (?:based|located|residing) in\b|\bwho hold (?:australian|canadian|new zealand|british|"
+                           r"uk|us|american|irish|singapore(?:an)?) citizenship\b|"
+                           r"\b(?:citizens?|citizenship) or permanent residen\w*\b[^.]{0,30}\b(?:only|required|must)\b", re.I)
 # Commission-only, MLM, "partner / co-founder" and paid-task posts are not real hires
 NOT_A_HIRE_TITLE_RE = re.compile(r"commission|co-?founder|\bequity\b|\bpartner\b(?! (?:success|marketing|manager|"
                                  r"relations|account))|paid (?:data )?task|data task|representative needed|\bcloser\b|"
-                                 r"high[- ]ticket|financial (?:professional|advisor|representative)|insurance (?:agent|producer)",
+                                 r"high[- ]ticket|financial (?:professional|advisor|representative)|insurance (?:agent|producer)|"
+                                 r"no licen[sc]e|licen[sc]e to start",
                                  re.I)
 NOT_A_HIRE_DESC_RE = re.compile(r"commission[- ]only|commission[- ]based|100% commission|straight commission|"
                                 r"equity[- ]only|unpaid|no base (?:pay|salary)|uncapped commission|independent business opportunity|"
@@ -513,7 +570,8 @@ HARD_LOCAL_TITLE_RE = re.compile(r"american accent|\bw-?2\b|\benterprise\b|\breg
                                  r"personal trainers?|fitness (?:coach|instructor)|clearance required|security clearance|secret clearance|"
                                  r"top secret|\bts/sci\b|security cleared|\bclearance\b|\btutors?\b|\btutoring\b|research contributor|desktop support|"
                                  r"\bai research(?! (?:engineer|scientist))|research consultant|\bai\b[^|]{0,40}\b(?:evaluator|rater)\b|"
-                                 r"interpreter|translator|\bbilingual\b|\bplc\b|\bscada\b|industrial controls|controls (?:engineer|technician)", re.I)
+                                 r"interpreter|translator|\bbilingual\b|\bplc\b|\bscada\b|industrial controls|controls (?:engineer|technician)|"
+                                 r"drone (?:operator|pilot)|\breporters?\b|\bjournalists?\b|\bcorrespondents?\b", re.I)
 # AI gig marketplaces (named in the post) and "contributor" gigs: not real hires
 AI_GIG_DESC_RE = re.compile(r"\b(?:mercor|outlier ?ai|outlier\.ai|alignerr|micro1|dataannotation|data annotation tech|remotasks|"
                             r"invisible technologies|handshake ai)\b|"
@@ -664,7 +722,8 @@ MANAGER_SIGNAL_RE = re.compile(r"work from anywhere|anywhere in the world|worldw
 
 # Searches where any outsourceable role counts (only the hard no's apply)
 OPEN_CATEGORIES = {"General Remote", "Worldwide Hiring", "Tech Web & Mobile", "Tech QA & DevOps", "Tech AI & Data",
-                   "E-commerce Support", "Video & Content", "No-Code & CRM Tech",
+                   "E-commerce Support", "Video & Content", "No-Code & CRM Tech", "AI & Automation", "Remote Roles",
+                   "Design, Product & Delivery", "Small Business Marketing",
                    "Other Remote", "More Remote Roles"}        # old names kept so older runs still read the same
 
 # Tech roles: "Senior" / "Sr" / "Lead" / "Staff" / "Principal" allowed at 1-50 staff (Director, Head, VP stay blocked)
@@ -873,6 +932,8 @@ def is_agency(company, industry, desc, title=""):
         return True
     if re.search(r"^hire|\bhire", c):                 # "Hirevantis", "HireQuest": recruiters
         return True
+    if re.search(r"\bpeople(?: group| ltd| limited| pty(?: ltd)?| inc| llc| co)?\.?$", c):
+        return True                              # "provenio people": recruitment firms
     if any(w in c for w in AGENCY_NAME_WORDS):
         return True
     return any(p in d for p in AGENCY_PHRASES)
@@ -1089,6 +1150,8 @@ def crm_manager_title(title, category):
 
 def title_not_english(title):
     """Catches titles like 'Intégrateur(trice) web' or 'German and English Speaking'."""
+    if re.search(r"[\u0400-\u04FF\u0590-\u06FF\u0E00-\u0E7F\u3040-\u30FF\u3400-\u9FFF\uAC00-\uD7AF]", title):
+        return True                                    # Chinese, Japanese, Korean, Arabic, Hebrew, Cyrillic, Thai titles
     if needs_other_language(title) or LANG_RE.search(title):
         return True
     words = re.findall(r"[^\W\d_]+", title)
@@ -1167,6 +1230,14 @@ CLEAR_HYBRID_RE = re.compile(r"(?<!not )\bhybrid\b|"
                              r"\boffice attendance (?:is )?(?:required|expected)\b|\bin[- ]office,? \w+ (?:through|to|-) \w+day", re.I)
 
 
+# A direct statement that the job is on-site ("This is a full-time, on-site role located in Toronto")
+HARD_ONSITE_RE = re.compile(r"\b(?:this is|it is|is) an? (?:(?:full|part)[- ]time,? |permanent,? |contract,? )*(?:on[- ]?site|"
+                            r"in[- ]office|in[- ]person|office[- ]based) (?:role|position|job|opportunity)\b|"
+                            r"\bnot (?:a )?remote\b|\bno option to work remotely\b|\bwork from home is not possible\b", re.I)
+# A US city in the title ("Full-time reporter in Fort Worth, TX"): on-site (case-sensitive on purpose)
+TITLE_IN_CITY_RE = re.compile(r"\bin [A-Z][a-z]+(?: [A-Z][a-z]+){0,2},\s*[A-Z]{2}\b")
+
+
 def decide_work(row, title, desc, page_tag="", remote_hit=False):
     """Work type (strict, from 19 Nov). Office or hybrid wording always wins (never pitched), unless the title or
     the job location itself says Remote.
@@ -1190,6 +1261,8 @@ def decide_work(row, title, desc, page_tag="", remote_hit=False):
     if re.search(r"\b(?:\d|one|two|three|four)\s*(?:days?|x)\s*(?:a week |per week |pw |/ ?week )?(?:on[- ]?site|in[- ]office|"
                  r"in (?:the )?office)", title, re.I):
         return "Hybrid"                        # "Dublin/Remote (2 days onsite pw)": the title itself says hybrid
+    if HARD_ONSITE_RE.search(d) and not head_remote:
+        return "On-site"                       # "This is a full-time, on-site role" beats any other remote wording
     if hy and not head_remote:
         return "Hybrid"                        # hybrid wording wins, even if the post also says "work remotely"
     if on and not head_remote and not rem:
@@ -1200,8 +1273,8 @@ def decide_work(row, title, desc, page_tag="", remote_hit=False):
     city = bool(CITY_LOC_RE.search(loc)) and "remote" not in loc.lower() and not state_wide
     if head_remote:
         return "Remote"
-    if TITLE_CITY_RE.search(title):
-        return "On-site"                       # "Copywriter - NYC", "Data Analyst (Omaha, NE)"
+    if TITLE_CITY_RE.search(title) or TITLE_IN_CITY_RE.search(title):
+        return "On-site"                       # "Copywriter - NYC", "Data Analyst (Omaha, NE)", "Reporter in Fort Worth, TX"
     if rem:
         return "Remote"                        # a clear phrase ("fully remote") beats the office's city
     if city:
@@ -1835,7 +1908,7 @@ def main():
         for cat_name, cfg in CATEGORIES.items():
             if not cfg["enabled"] or (ONLY_CATEGORY and cat_name != ONLY_CATEGORY):
                 continue
-            if region_name not in (cfg.get("regions") or CORE_REGIONS):
+            if region_name not in (cfg.get("regions") or ENGLISH_REGIONS):
                 continue                                 # new regions: tech + worldwide hiring only
             ran.append(f"{cat_name} | {region_name}")
             print(f"\n== {cat_name} | {region_name} ==")
@@ -1930,7 +2003,8 @@ def main():
                         if title_not_english(title) or not is_english(desc) or needs_other_language(desc):
                             ex_lang.add(key)
                             continue
-                        if location_locked(title, text(row.get("location")), desc) or HARD_LOCAL_RE.search(desc):
+                        if location_locked(title, text(row.get("location")), desc) or HARD_LOCAL_RE.search(desc) \
+                                or CITY_LOCK_RE.search(title + " \n" + desc) or STATE_LOCK_RE.search(desc):
                             ex_loc.add(key)                              # must live in the US, W-2, licensed...
                             skip_note(row, title, desc, company, cat_name, "Must live in the US / W-2 / licensed",
                                       remote_pass)
