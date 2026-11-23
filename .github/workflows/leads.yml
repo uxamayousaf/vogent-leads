@@ -3,6 +3,11 @@ name: Find Leads
 on:
   # Started every morning by the Google Sheet (exact time, see startDailyRun in Apps Script)
   workflow_dispatch:        # adds a "Run workflow" button for manual runs
+    inputs:
+      only_region:
+        description: "Leave empty for the full run. Type one region (for example Sweden) to run only that region."
+        required: false
+        default: ""
 
 jobs:
   # ---------- Phase 1: job search ----------
@@ -84,12 +89,17 @@ jobs:
             region: "Denmark"
           - category: "AI & Automation"
             region: "Denmark"
+          - category: "Sweden Tech"          # added 23 Nov: deep IT scan, Sweden only
+            region: "Sweden"
     steps:
       - uses: actions/checkout@v4
+        if: ${{ !inputs.only_region || matrix.region == inputs.only_region }}
       - uses: actions/setup-python@v5
+        if: ${{ !inputs.only_region || matrix.region == inputs.only_region }}
         with:
           python-version: "3.11"
       - name: Install tools (tries again if the download drops)
+        if: ${{ !inputs.only_region || matrix.region == inputs.only_region }}
         run: |
           for i in 1 2 3 4 5; do
             pip install --retries 5 --timeout 60 python-jobspy requests langdetect && exit 0
@@ -97,6 +107,7 @@ jobs:
           done
           exit 1
       - run: python find_leads.py
+        if: ${{ !inputs.only_region || matrix.region == inputs.only_region }}
         env:
           CATEGORY: ${{ matrix.category }}
           REGION: ${{ matrix.region }}
@@ -104,6 +115,7 @@ jobs:
           SHEET_TOKEN: ${{ secrets.SHEET_TOKEN }}
           APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}      # used only by the SimplyHired search
       - uses: actions/upload-artifact@v4
+        if: ${{ !inputs.only_region || matrix.region == inputs.only_region }}
         with:
           name: candidates-${{ strategy.job-index }}
           path: candidates/
