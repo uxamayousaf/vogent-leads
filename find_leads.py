@@ -33,6 +33,7 @@ DetectorFactory.seed = 0
 PKT = dt.timezone(dt.timedelta(hours=5))
 HOURS_OLD = 72 if dt.datetime.now(PKT).weekday() == 0 else 48
 MAX_EMPLOYEES = 50      # founder-led small companies only (unknown size is kept, ranked last)
+REGION_MAX_EMPLOYEES = {"Sweden": 200}   # Sweden only (from 23 Nov): up to 200 staff, ranked after 1-50
 
 # rank = order in your sheet. scale = fewer results per search for smaller markets.
 # Each location: (LinkedIn search location, short name shown in sheet)
@@ -41,14 +42,14 @@ REGIONS = {
     "Canada": {"enabled": True, "rank": 2, "scale": 1.0, "locations": [("Canada", "Canada")]},
     "UK": {"enabled": True, "rank": 3, "scale": 1.0, "locations": [("United Kingdom", "UK")]},
     # Asia Pacific and Europe (from 17 Nov 2026): tech searches + worldwide hiring only, fewer results per search
-    "Singapore": {"enabled": True, "rank": 4, "scale": 0.5, "locations": [("Singapore", "Singapore")]},
+    "Singapore": {"enabled": True, "rank": 4, "scale": 1.0, "locations": [("Singapore", "Singapore")]},
     "Malaysia": {"enabled": True, "rank": 5, "scale": 0.5, "locations": [("Malaysia", "Malaysia")]},
     "Australia": {"enabled": True, "rank": 6, "scale": 1.0, "locations": [("Australia", "Australia")]},
     "New Zealand": {"enabled": True, "rank": 7, "scale": 1.0, "locations": [("New Zealand", "New Zealand")]},
-    "Ireland": {"enabled": True, "rank": 8, "scale": 0.5, "locations": [("Ireland", "Ireland")]},
+    "Ireland": {"enabled": True, "rank": 8, "scale": 1.0, "locations": [("Ireland", "Ireland")]},
     "Netherlands": {"enabled": True, "rank": 9, "scale": 0.5, "locations": [("Netherlands", "Netherlands")]},
     "Germany": {"enabled": True, "rank": 10, "scale": 0.5, "locations": [("Germany", "Germany")]},
-    "Sweden": {"enabled": True, "rank": 11, "scale": 0.5, "locations": [("Sweden", "Sweden")]},
+    "Sweden": {"enabled": True, "rank": 11, "scale": 1.0, "locations": [("Sweden", "Sweden")]},
     "Denmark": {"enabled": True, "rank": 12, "scale": 0.5, "locations": [("Denmark", "Denmark")]},
 }
 CORE_REGIONS = ["USA", "Canada", "UK"]                  # every search runs here
@@ -190,14 +191,20 @@ CATEGORIES = {
     },
     "Remote Roles": {
         # Added 22 Nov: everyday roles searched with the word "Remote" (brings back more truly remote posts)
-        "enabled": True, "deep_results": 0, "normal_results": 40, "regions": ENGLISH_REGIONS, "remote_only": True,
+        "enabled": True, "deep_results": 0, "normal_results": 40, "core_results": 60, "regions": ENGLISH_REGIONS,
+        "remote_only": True,
         "deep_searches": [],
         "searches": ["Remote Executive Assistant", "Remote Administrative Assistant", "Remote Operations Coordinator",
                      "Remote Project Coordinator", "Remote Marketing Coordinator", "Remote Recruiter",
                      "Remote Talent Sourcer", "Remote Customer Success", "Remote Customer Support",
                      "Remote Data Analyst", "Remote Bookkeeper", "Remote Accountant", "Remote Graphic Designer",
                      "Remote Web Designer", "Remote UI UX Designer", "Remote Video Editor", "Remote Content Writer",
-                     "Remote Copywriter", "Remote SEO Specialist", "Remote Social Media Coordinator"],
+                     "Remote Copywriter", "Remote SEO Specialist", "Remote Social Media Coordinator",
+                     # added 23 Nov
+                     "Remote Appointment Setter", "Remote Sales Development Representative",
+                     "Remote Lead Generation Specialist", "Remote Email Marketing Specialist", "Remote Paid Ads Specialist",
+                     "Remote WordPress Developer", "Remote Shopify Developer", "Remote Customer Service Representative",
+                     "Remote Transaction Coordinator", "Remote Scheduling Coordinator"],
         "must_mention": [],
     },
     "Design, Product & Delivery": {
@@ -211,11 +218,26 @@ CATEGORIES = {
     },
     "Small Business Marketing": {
         # Added 22 Nov: everyday marketing every small business needs (hard to find cheap locally)
-        "enabled": True, "deep_results": 0, "normal_results": 40, "regions": ENGLISH_REGIONS, "remote_only": True,
+        "enabled": True, "deep_results": 0, "normal_results": 40, "core_results": 60, "regions": ENGLISH_REGIONS,
+        "remote_only": True,
         "deep_searches": [],
         "searches": ["Digital Marketing Assistant", "Digital Marketing Coordinator", "Marketing Generalist",
                      "Google Business Profile", "Facebook Ads Specialist", "Content Creator", "CRM Coordinator",
                      "Marketing Operations Coordinator", "Social Media Assistant"],
+        "must_mention": [],
+    },
+    "Sweden Tech": {
+        # Added 23 Nov: deep IT scan for Sweden only (tech shortage). Same strict remote rule; up to 200 staff.
+        "enabled": True, "deep_results": 0, "normal_results": 60, "regions": ["Sweden"], "remote_only": True,
+        "deep_searches": [],
+        "searches": ["Systems Developer", "Software Developer", "Java Developer", "C# Developer", ".NET Developer",
+                     "Python Developer", "Go Developer", "Kotlin Developer", "TypeScript Developer", "React Developer",
+                     "Angular Developer", "Vue Developer", "Node.js Developer", "iOS Developer", "Android Developer",
+                     "Flutter Developer", "Cloud Engineer", "Azure Engineer", "AWS Engineer", "Platform Engineer",
+                     "DevOps Engineer", "Site Reliability Engineer", "Kubernetes Engineer", "Data Engineer",
+                     "Analytics Engineer", "MLOps Engineer", "Machine Learning Engineer", "AI Engineer", "LLM Engineer",
+                     "Test Automation Engineer", "QA Engineer", "Cybersecurity Engineer", "Embedded Software Engineer",
+                     "UX Designer", "UI Designer", "Product Designer"],
         "must_mention": [],
     },
     "Worldwide Hiring": {
@@ -521,6 +543,7 @@ HARD_LOCAL_RE = re.compile(r"american accent|native (?:us|u\.s\.|american) engli
                            r"must (?:live|reside|be located|be based) (?:in|within|near)|local (?:candidates|applicants) only|"
                            r"must hold an? (?:active |valid )?(?:insurance|real estate|nursing|cpa|state) licen[sc]e|"
                            r"relocat\w*[^.]{0,50}\b(?:expected|required|mandatory|necessary)|(?:expected|required|must|need) to relocate|"
+                           r"\b(?:willing|able)(?: and (?:willing|able))? to relocate\b|\(\s*w-?2\b|\bw-?2 contract\b|"
                            r"\bresidents only\b|\(\s*in [a-z .]{2,30} only\s*\)|\b(?:remote|open to candidates)[^.]{0,25}\bin "
                            r"(?:canada|the us|the u\.s\.|the uk|texas|california|florida|australia) only\b", re.I)
 # Remote, but only for people in one city ("remote/work-from-home in Fort Worth, Texas", "Remote in Charlotte, NC")
@@ -539,14 +562,15 @@ STATE_LOCK_RE = re.compile(r"\b(?:open to|only|accepting|considering) (?:candida
                            r"uk|us|american|irish|singapore(?:an)?) citizenship\b|"
                            r"\b(?:citizens?|citizenship) or permanent residen\w*\b[^.]{0,30}\b(?:only|required|must)\b", re.I)
 # Commission-only, MLM, "partner / co-founder" and paid-task posts are not real hires
-NOT_A_HIRE_TITLE_RE = re.compile(r"commission|co-?founder|\bequity\b|\bpartner\b(?! (?:success|marketing|manager|"
+NOT_A_HIRE_TITLE_RE = re.compile(r"commission|\bprovision\b|co-?founder|\bequity\b|\bpartner\b(?! (?:success|marketing|manager|"
                                  r"relations|account))|paid (?:data )?task|data task|representative needed|\bcloser\b|"
                                  r"high[- ]ticket|financial (?:professional|advisor|representative)|insurance (?:agent|producer)|"
                                  r"no licen[sc]e|licen[sc]e to start",
                                  re.I)
 NOT_A_HIRE_DESC_RE = re.compile(r"commission[- ]only|commission[- ]based|100% commission|straight commission|"
                                 r"equity[- ]only|unpaid|no base (?:pay|salary)|uncapped commission|independent business opportunity|"
-                                r"self[- ]employed[^.\n]{0,40}(?:opportunity|commission|business owner)", re.I)
+                                r"self[- ]employed[^.\n]{0,40}(?:opportunity|commission|business owner)|provisionsbasis|100 ?% provision|"
+                                r"reine[rn]? provision", re.I)
 # IT services firms that resell staff to their clients
 IT_STAFFING_NAME_RE = re.compile(r"\b(?:it solutions|infotech|info tech|technologies|tech solutions|softech|"
                                  r"consulting|consultancy|staffing)\b", re.I)
@@ -571,7 +595,8 @@ HARD_LOCAL_TITLE_RE = re.compile(r"american accent|\bw-?2\b|\benterprise\b|\breg
                                  r"top secret|\bts/sci\b|security cleared|\bclearance\b|\btutors?\b|\btutoring\b|research contributor|desktop support|"
                                  r"\bai research(?! (?:engineer|scientist))|research consultant|\bai\b[^|]{0,40}\b(?:evaluator|rater)\b|"
                                  r"interpreter|translator|\bbilingual\b|\bplc\b|\bscada\b|industrial controls|controls (?:engineer|technician)|"
-                                 r"drone (?:operator|pilot)|\breporters?\b|\bjournalists?\b|\bcorrespondents?\b", re.I)
+                                 r"drone (?:operator|pilot)|\bplumbers?\b|\belectricians?\b|\bhvac tech|\bcarpenters?\b|\bwelders?\b|"
+                                 r"\bmechanics?\b|\broofers?\b|\breporters?\b|\bjournalists?\b|\bcorrespondents?\b", re.I)
 # AI gig marketplaces (named in the post) and "contributor" gigs: not real hires
 AI_GIG_DESC_RE = re.compile(r"\b(?:mercor|outlier ?ai|outlier\.ai|alignerr|micro1|dataannotation|data annotation tech|remotasks|"
                             r"invisible technologies|handshake ai)\b|"
@@ -585,7 +610,8 @@ DEALER_NAME_RE = re.compile(r"\b(?:subaru|toyota|honda|nissan|hyundai|mazda|chev
 
 # Scam-style or junk posts (home-based travel booking, "No Experience Needed", event recruiting ads)
 JUNK_COMPANIES = {"dreamscape", "premierdestinationgroup", "torentify"}
-JUNK_TITLE_RE = re.compile(r"no experience (?:needed|required|necessary)|management trainee|travel associate|let[\u2019']?s (?:connect|meet) at|meet us at|"
+JUNK_TITLE_RE = re.compile(r"no experience (?:needed|required|necessary)|help us grow our|join our (?:talent )?(?:network|community|pool)|"
+                           r"talent (?:network|pool|community)\b|management trainee|travel associate|let[\u2019']?s (?:connect|meet) at|meet us at|"
                            r"visit (?:us|our booth) at|career fair|job fair|hiring event|travel bookings?\b|"
                            r"data entry[^|]*(?:work from home|\bwfh\b)|build (?:a|your) schedule|schedule that works|"
                            r"^(?:work from home|wfh) and\b", re.I)
@@ -723,7 +749,7 @@ MANAGER_SIGNAL_RE = re.compile(r"work from anywhere|anywhere in the world|worldw
 # Searches where any outsourceable role counts (only the hard no's apply)
 OPEN_CATEGORIES = {"General Remote", "Worldwide Hiring", "Tech Web & Mobile", "Tech QA & DevOps", "Tech AI & Data",
                    "E-commerce Support", "Video & Content", "No-Code & CRM Tech", "AI & Automation", "Remote Roles",
-                   "Design, Product & Delivery", "Small Business Marketing",
+                   "Design, Product & Delivery", "Small Business Marketing", "Sweden Tech",
                    "Other Remote", "More Remote Roles"}        # old names kept so older runs still read the same
 
 # Tech roles: "Senior" / "Sr" / "Lead" / "Staff" / "Principal" allowed at 1-50 staff (Director, Head, VP stay blocked)
@@ -1184,7 +1210,7 @@ NOT_JOB_REMOTE_RE = re.compile(r"(?<!fully )(?<!100% )(?<!completely )(?<!entire
                                r"units?|desktop|connection|connections|diagnos\w*|technical support|tech support|support|"
                                r"troubleshoot\w*|devices?|operat\w*|locations?|sites?|areas?|communities|villages|"
                                r"(?:working )?environment|teams?|employees|workers|colleagues|staff)\b|"
-                               r"\bnot (?:a )?remote\b|\bnon[- ]remote\b|\bno remote\b|\bremote (?:work )?is not\b|"
+                               r"\bnot (?:a )?remote\b|\bisn['\u2019]?t a remote\b|\bnon[- ]remote\b|\bno remote\b|\bremote (?:work )?is not\b|"
                                r"\bno option to work remotely\b|\bwork from home is not possible\b", re.I)
 # Clear phrases that the JOB ITSELF is remote (from 19 Nov the LinkedIn Remote filter + the bare word "remote" is not enough)
 CLEAR_REMOTE_RE = re.compile(
@@ -1233,6 +1259,8 @@ CLEAR_HYBRID_RE = re.compile(r"(?<!not )\bhybrid\b|"
 # A direct statement that the job is on-site ("This is a full-time, on-site role located in Toronto")
 HARD_ONSITE_RE = re.compile(r"\b(?:this is|it is|is) an? (?:(?:full|part)[- ]time,? |permanent,? |contract,? )*(?:on[- ]?site|"
                             r"in[- ]office|in[- ]person|office[- ]based) (?:role|position|job|opportunity)\b|"
+                            r"\b(?:this|the) (?:(?:full|part)[- ]time,? |permanent,? )*(?:on[- ]?site|in[- ]office|in[- ]person)"
+                            r"\b[^.]{0,50}\b(?:role|position|job)\b|\b(?:isn['\u2019]?t|is not) a remote\b|"
                             r"\bnot (?:a )?remote\b|\bno option to work remotely\b|\bwork from home is not possible\b", re.I)
 # A US city in the title ("Full-time reporter in Fort Worth, TX"): on-site (case-sensitive on purpose)
 TITLE_IN_CITY_RE = re.compile(r"\bin [A-Z][a-z]+(?: [A-Z][a-z]+){0,2},\s*[A-Z]{2}\b")
@@ -2027,9 +2055,10 @@ def main():
                             continue                                     # website shows a staffing firm
                         if sh_cat and not COMPANY_HQ.get(company_url.split("?")[0].rstrip("/")):
                             company_url = linkedin_company_search(company)   # page not found: LinkedIn search link
-                        if size_min is not None and size_min > MAX_EMPLOYEES and not sh_cat:
+                        max_staff = REGION_MAX_EMPLOYEES.get(region_name, MAX_EMPLOYEES)
+                        if size_min is not None and size_min > max_staff and not sh_cat:
                             ex_big.add(key)
-                            skip_note(row, title, desc, company, cat_name, f"More than 50 staff ({size_label})",
+                            skip_note(row, title, desc, company, cat_name, f"More than {max_staff} staff ({size_label})",
                                       remote_pass, size_label)
                             continue
                         if text(row.get("site")) in BOARD_SITES and not us_company(company_url):
@@ -2051,7 +2080,7 @@ def main():
                                       "Manager title, company size unknown" if size_min is None else
                                       f"Manager title at {size_label} staff", remote_pass, size_label)
                             continue
-                        if crm_mgr and not sh_cat and (size_min is None or size_min > 50):
+                        if crm_mgr and not sh_cat and (size_min is None or size_min > max_staff):
                             ex_senior.add(key)                           # Manager / Lead / Senior only at 1-50 staff
                             skip_note(row, title, desc, company, cat_name,
                                       "Senior title, company size unknown" if size_min is None else
