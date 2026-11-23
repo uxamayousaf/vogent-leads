@@ -21,6 +21,11 @@ import requests
 # ============================ SETTINGS ============================
 DAILY_TOTAL = 0                          # 0 = no daily limit: every eligible lead is queued (emails still 22 a day)
 MAX_COMPANY_SIZE = 50                    # founder-led companies: 1 to 50 staff (unknown size ranked last)
+REGION_MAX_SIZE = {"Sweden": 200}        # Sweden only (from 23 Nov): up to 200 staff, ranked after 1-50
+
+
+def max_size(l):
+    return REGION_MAX_SIZE.get(l.get("region"), MAX_COMPANY_SIZE)
 SMALL_COMPANY = 50
 WEEKDAYS_ONLY = True                     # Monday to Friday (Pakistan time)
 REGION_ORDER = {"USA": 1, "Canada": 2, "UK": 3, "Singapore": 4, "Malaysia": 5, "Australia": 6, "New Zealand": 7,
@@ -170,8 +175,8 @@ def skip_reason(l):
     if is_nonprofit(l):
         return "Nonprofit / school / association"
     size_min = l.get("size_min")
-    if size_min is not None and size_min > MAX_COMPANY_SIZE:
-        return f"More than 50 staff ({l.get('size')})"
+    if size_min is not None and size_min > max_size(l):
+        return f"More than {max_size(l)} staff ({l.get('size')})"
     if size_min is None and not ("GHL" in str(l.get("priority") or "") or l.get("worldwide") or l.get("tiny_clue")):
         return "Company size unknown (no small-business signal)"
     return "Not eligible"
@@ -214,7 +219,7 @@ def eligible(l):
     if any(w in comp for w in NOT_EMPLOYER_NAME_WORDS) or any(w in title for w in NOT_EMPLOYER_TITLE_WORDS):
         return False                       # job boards, aggregators, entry-level commission posts
     size_min = l.get("size_min")
-    if size_min is not None and size_min > MAX_COMPANY_SIZE:
+    if size_min is not None and size_min > max_size(l):
         return False
     if is_nonprofit(l) or norm(l.get("company")) in ("confidential", "confidentialcompany", "stealth", "stealthstartup"):
         return False                       # nonprofits, associations, credit unions, hidden company names
@@ -248,15 +253,15 @@ def is_nonprofit(l):
 
 
 def size_tier(l):
-    """1-10 staff first, then 11-20, then 21-50, unknown size last."""
+    """1-10 staff first, then 11-20, then 21-50, then 51-200 (Sweden only), unknown size last."""
     size_min, staff = l.get("size_min"), l.get("staff_count")
     if size_min is None:
-        return 3
+        return 4
     if size_min <= 10:
         return 0
     if staff is not None and staff <= 20:
         return 1
-    return 2
+    return 2 if size_min <= 50 else 3
 
 
 # Roles that are easiest to staff, in this order. Others only fill the day if these are not enough.
@@ -318,7 +323,10 @@ def rank_key(l):
     except ValueError:
         newest = 0
     ghl = 0 if "GHL" in str(l.get("priority") or "") else 1
-    return (role_tier(l), 1 if onsite_ask(l) else 0, size_tier(l), 0 if l.get("worldwide") else 1, ghl, newest)
+    tier = role_tier(l)
+    if l.get("region") == "Sweden" and is_tech_role(l.get("title")) and tier == [n for n, _ in ROLE_PRIORITY].index("Tech"):
+        tier = 0.5                                     # Sweden tech: right after GHL / CRM, ahead of other tech (23 Nov)
+    return (tier, 1 if onsite_ask(l) else 0, size_tier(l), 0 if l.get("worldwide") else 1, ghl, newest)
 
 
 # ---------- 2. Find decision makers with Apify ----------
