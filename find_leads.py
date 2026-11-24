@@ -543,7 +543,11 @@ HARD_LOCAL_RE = re.compile(r"american accent|native (?:us|u\.s\.|american) engli
                            r"must (?:live|reside|be located|be based) (?:in|within|near)|local (?:candidates|applicants) only|"
                            r"must hold an? (?:active |valid )?(?:insurance|real estate|nursing|cpa|state) licen[sc]e|"
                            r"relocat\w*[^.]{0,50}\b(?:expected|required|mandatory|necessary)|(?:expected|required|must|need) to relocate|"
-                           r"\b(?:willing|able)(?: and (?:willing|able))? to relocate\b|\(\s*w-?2\b|\bw-?2 contract\b|"
+                           r"\b(?:willing|able)(?: and (?:willing|able))? to relocate\b|"
+                           r"\bremote (?:with)?in (?:the state of )?(?:california|texas|florida|new york|ontario|quebec|alberta|"
+                           r"british columbia|washington|illinois|georgia|colorado|arizona|ohio|pennsylvania|virginia|"
+                           r"north carolina|new jersey|massachusetts|michigan|oregon|utah|nevada|tennessee)\b|"
+                           r"\bvalid (?:work )?visa to work in\b|\bbased in new zealand,? with a valid\b|\(\s*w-?2\b|\bw-?2 contract\b|"
                            r"\bresidents only\b|\(\s*in [a-z .]{2,30} only\s*\)|\b(?:remote|open to candidates)[^.]{0,25}\bin "
                            r"(?:canada|the us|the u\.s\.|the uk|texas|california|florida|australia) only\b", re.I)
 # Remote, but only for people in one city ("remote/work-from-home in Fort Worth, Texas", "Remote in Charlotte, NC")
@@ -570,9 +574,11 @@ NOT_A_HIRE_TITLE_RE = re.compile(r"commission|\bprovision\b|co-?founder|\bequity
 NOT_A_HIRE_DESC_RE = re.compile(r"commission[- ]only|commission[- ]based|100% commission|straight commission|"
                                 r"equity[- ]only|unpaid|no base (?:pay|salary)|uncapped commission|independent business opportunity|"
                                 r"self[- ]employed[^.\n]{0,40}(?:opportunity|commission|business owner)|provisionsbasis|100 ?% provision|"
-                                r"reine[rn]? provision", re.I)
+                                r"reine[rn]? provision|uncapped (?:earning|income)|(?:life|health|life & health|insurance) (?:& health )?"
+                                r"insurance licen[sc]e|insurance licen[sc]e|around your studies", re.I)
 # IT services firms that resell staff to their clients
-IT_STAFFING_NAME_RE = re.compile(r"\b(?:it solutions|infotech|info tech|technologies|tech solutions|softech|"
+IT_STAFFING_NAME_RE = re.compile(r"\b(?:it solutions|infotech|info tech|technologies|tech solutions|softech|softsol|"
+                                 r"technology solutions|"
                                  r"consulting|consultancy|staffing)\b", re.I)
 # Small-business clue for companies whose size is unknown
 TINY_CLUE_RE = re.compile(r"small (?:business|team|company|firm|family)|family[- ]owned|owner[- ]operated|"
@@ -595,7 +601,7 @@ HARD_LOCAL_TITLE_RE = re.compile(r"american accent|\bw-?2\b|\benterprise\b|\breg
                                  r"top secret|\bts/sci\b|security cleared|\bclearance\b|\btutors?\b|\btutoring\b|research contributor|desktop support|"
                                  r"\bai research(?! (?:engineer|scientist))|research consultant|\bai\b[^|]{0,40}\b(?:evaluator|rater)\b|"
                                  r"interpreter|translator|\bbilingual\b|\bplc\b|\bscada\b|industrial controls|controls (?:engineer|technician)|"
-                                 r"drone (?:operator|pilot)|\bplumbers?\b|\belectricians?\b|\bhvac tech|\bcarpenters?\b|\bwelders?\b|"
+                                 r"drone (?:operator|pilot)|\bfield service\b|\bplumbers?\b|\belectricians?\b|\bhvac tech|\bcarpenters?\b|\bwelders?\b|"
                                  r"\bmechanics?\b|\broofers?\b|\breporters?\b|\bjournalists?\b|\bcorrespondents?\b", re.I)
 # AI gig marketplaces (named in the post) and "contributor" gigs: not real hires
 AI_GIG_DESC_RE = re.compile(r"\b(?:mercor|outlier ?ai|outlier\.ai|alignerr|micro1|dataannotation|data annotation tech|remotasks|"
@@ -952,7 +958,8 @@ def is_agency(company, industry, desc, title=""):
     if "staffing" in ind or "recruit" in ind or "human resources services" in ind:
         return True
     if re.search(r"recruit(?:ing|ment) network|executive search firm|staffing firm|placement firm|npaworldwide|"
-                 r"people solutions|workforce solutions|talent solutions", c + " " + d):
+                 r"people solutions|workforce solutions|talent solutions|recruiting(?:,| and| &)?[^.]{0,40}\bfirm\b|"
+                 r"(?:a|leading|premier) (?:contract )?recruiter\b|contract recruiter which", c + " " + d):
         return True
     if any(re.search(r"\b" + re.escape(b) + r"\b", c) for b in AGENCY_BLOCKLIST):
         return True
@@ -1011,7 +1018,7 @@ CRM_TITLE_RE = re.compile(r"crm|hubspot|highlevel|high level|\bghl\b|automation|
                           r"marketing operations|marketing ops", re.I)
 GHL_RE = re.compile(r"go\s?high\s?level|\bhighlevel\b|\bghl\b|lead\s?connector", re.I)
 # No budget behind these: interns, volunteers, students
-NO_BUDGET_TITLE_RE = re.compile(r"\b(intern|interns|internship|volunteer|apprentice|apprenticeship|student|"
+NO_BUDGET_TITLE_RE = re.compile(r"\b(intern|interns|internship|volunteer|apprentice|apprenticeship|student|co-?op|"
                                 r"fellowship)\b", re.I)
 # Gig listings dressed up as jobs ("Expert Opportunity ... $70/hr", "Publish Book in 2 weeks")
 GIG_TITLE_RE = re.compile(r"expert opportunity|\$\s?\d+(?:\.\d+)?\s?(?:/|per\s)\s?(?:hr|hour)\b|"
@@ -1092,7 +1099,7 @@ OTHER_BLOCK_RE = re.compile(r"\b(account executives?|sales representatives?|sale
                             r"(?:hardware|field|repair|bench|maintenance|lab|service|installation) technician)\b", re.I)
 
 
-LEADER_TITLE_RE = re.compile(r"\b(?:director|head of|vp|vice president|chief|cto|cmo|coo|ceo|cfo)\b", re.I)
+LEADER_TITLE_RE = re.compile(r"\b(?:director|head of|vp|vice[- ]president|chief|cto|cmo|coo|ceo|cfo)\b", re.I)
 SUPPORT_TITLE_RE = re.compile(r"assistant|coordinator|secretary|\baide\b|support|\bto (?:the )?(?:ceo|director|vp|chief)|"
                               r"office of", re.I)
 
@@ -1252,7 +1259,8 @@ CLEAR_HYBRID_RE = re.compile(r"(?<!not )\bhybrid\b|"
                              r"\b(?:\d|one|two|three)\s*(?:work[- ]from[- ]home|wfh|remote)\s*days\b|"
                              r"\bwork[- ]from[- ]home (?:flexibility|days?) \(?\s*(?:\d|one|two|three)|"
                              r"\bin (?:the )?office \d days\b|\bwork in the office (?:\d|one|two|three)|"
-                             r"\bmust be able to work in the office\b|\bspend(?:ing)? (?:some |regular )?time in (?:the|our) office\b|"
+                             r"\bmust be able to work in the office\b|\b(?:\d|one|two|three|four) days? (?:a|per) week (?:together )?in[- ]person\b|"
+                             r"\b(?:\d|one|two|three|four) days? (?:a|per) week together\b|\bspend(?:ing)? (?:some |regular )?time in (?:the|our) office\b|"
                              r"\boffice attendance (?:is )?(?:required|expected)\b|\bin[- ]office,? \w+ (?:through|to|-) \w+day", re.I)
 
 
@@ -2012,6 +2020,11 @@ def main():
                         if junk_post(title, company):
                             ex_role.add(key)
                             skip_note(row, title, desc, company, cat_name, "Scam-style / junk post", remote_pass)
+                            continue
+                        if re.search(r"\bservice engineer\b", title, re.I) and \
+                                re.search(r"field service|on-?site support|site visits|customer sites", desc, re.I):
+                            ex_role.add(key)
+                            skip_note(row, title, desc, company, cat_name, "Field service role", remote_pass)
                             continue
                         if AI_GIG_DESC_RE.search(desc):
                             ex_role.add(key)
