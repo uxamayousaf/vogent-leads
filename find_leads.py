@@ -400,7 +400,8 @@ AGENCY_NAME_WORDS = [
     "headhunt", "executive search", "4rec", "recruitment",
 ]
 AGENCY_PHRASES = [
-    "our client", "on behalf of our client", "on behalf of a client",
+    "our client", "on behalf of our client", "on behalf of a client", "our partner is a", "our partner is an",
+    "onsite/offshore", "onsite / offshore", "c2c", "corp to corp", "corp-to-corp",
     "for a client of ours", "client of ours", "my client", "on behalf of my client",
 ]
 
@@ -543,7 +544,8 @@ HARD_LOCAL_RE = re.compile(r"american accent|native (?:us|u\.s\.|american) engli
                            r"must (?:live|reside|be located|be based) (?:in|within|near)|local (?:candidates|applicants) only|"
                            r"must hold an? (?:active |valid )?(?:insurance|real estate|nursing|cpa|state) licen[sc]e|"
                            r"relocat\w*[^.]{0,50}\b(?:expected|required|mandatory|necessary)|(?:expected|required|must|need) to relocate|"
-                           r"\b(?:willing|able)(?: and (?:willing|able))? to relocate\b|"
+                           r"\b(?:willing|able)(?: and (?:willing|able))? to relocate\b|\b(?:[1-9]|1[0-2])[- ]week contract\b|"
+                           r"location:\s*[^.\n]{0,40}\(\s*required\s*\)|"
                            r"\bremote (?:with)?in (?:the state of )?(?:california|texas|florida|new york|ontario|quebec|alberta|"
                            r"british columbia|washington|illinois|georgia|colorado|arizona|ohio|pennsylvania|virginia|"
                            r"north carolina|new jersey|massachusetts|michigan|oregon|utah|nevada|tennessee)\b|"
@@ -601,7 +603,7 @@ HARD_LOCAL_TITLE_RE = re.compile(r"american accent|\bw-?2\b|\benterprise\b|\breg
                                  r"top secret|\bts/sci\b|security cleared|\bclearance\b|\btutors?\b|\btutoring\b|research contributor|desktop support|"
                                  r"\bai research(?! (?:engineer|scientist))|research consultant|\bai\b[^|]{0,40}\b(?:evaluator|rater)\b|"
                                  r"interpreter|translator|\bbilingual\b|\bplc\b|\bscada\b|industrial controls|controls (?:engineer|technician)|"
-                                 r"drone (?:operator|pilot)|\bfield service\b|\bplumbers?\b|\belectricians?\b|\bhvac tech|\bcarpenters?\b|\bwelders?\b|"
+                                 r"drone (?:operator|pilot)|insurance broker|\bactors?\b|\bactress(?:es)?\b|\bfield service\b|\bplumbers?\b|\belectricians?\b|\bhvac tech|\bcarpenters?\b|\bwelders?\b|"
                                  r"\bmechanics?\b|\broofers?\b|\breporters?\b|\bjournalists?\b|\bcorrespondents?\b", re.I)
 # AI gig marketplaces (named in the post) and "contributor" gigs: not real hires
 AI_GIG_DESC_RE = re.compile(r"\b(?:mercor|outlier ?ai|outlier\.ai|alignerr|micro1|dataannotation|data annotation tech|remotasks|"
@@ -631,6 +633,8 @@ def junk_post(title, company):
     Also car dealerships (on-site BDC / service desks)."""
     if DEALER_TITLE_RE.search(title) or DEALER_NAME_RE.search(str(company or "")):
         return True
+    if re.search(r"\bcic\b|\binternships?\b", str(company or ""), re.I):
+        return True                                    # community interest companies, internship placement firms
     co = re.sub(r"(?:llc|inc)$", "", re.sub(r"[^a-z0-9]", "", str(company or "").lower()))
     if co in JUNK_COMPANIES:
         return True
@@ -958,7 +962,7 @@ def is_agency(company, industry, desc, title=""):
     if "staffing" in ind or "recruit" in ind or "human resources services" in ind:
         return True
     if re.search(r"recruit(?:ing|ment) network|executive search firm|staffing firm|placement firm|npaworldwide|"
-                 r"people solutions|workforce solutions|talent solutions|recruiting(?:,| and| &)?[^.]{0,40}\bfirm\b|"
+                 r"people solutions|workforce solutions|talent solutions|\bto (?:a|the) state of \w+(?: \w+)? contract\b|recruiting(?:,| and| &)?[^.]{0,40}\bfirm\b|"
                  r"(?:a|leading|premier) (?:contract )?recruiter\b|contract recruiter which", c + " " + d):
         return True
     if any(re.search(r"\b" + re.escape(b) + r"\b", c) for b in AGENCY_BLOCKLIST):
@@ -972,9 +976,17 @@ def is_agency(company, industry, desc, title=""):
     return any(p in d for p in AGENCY_PHRASES)
 
 
+FOREIGN_WORDS_RE = re.compile(r"\b(?:je|jouw|wij|onze|het|een|voor|met|bij|naar|niet|ook|und|wir|sie|ihre|unser|mit|"
+                              r"f\u00fcr|nicht|eine|oder|auch|och|att|vi|med|f\u00f6r|som|inte|det|ett|til|og|ikke|vores|jeres)\b",
+                              re.I)
+
+
 def is_english(desc):
     if len(desc) < 80:
         return True  # too short to judge, keep it
+    words = re.findall(r"[^\W\d_]+", desc[:3000])
+    if len(words) >= 40 and len(FOREIGN_WORDS_RE.findall(desc[:3000])) / len(words) > 0.06:
+        return False                     # mostly Dutch, German, Swedish or Danish (an English title can fool langdetect)
     try:
         return detect(desc[:3000]) == "en"
     except Exception:
@@ -1265,7 +1277,8 @@ CLEAR_HYBRID_RE = re.compile(r"(?<!not )\bhybrid\b|"
 
 
 # A direct statement that the job is on-site ("This is a full-time, on-site role located in Toronto")
-HARD_ONSITE_RE = re.compile(r"\b(?:this is|it is|is) an? (?:(?:full|part)[- ]time,? |permanent,? |contract,? )*(?:on[- ]?site|"
+HARD_ONSITE_RE = re.compile(r"\b(?:skilled|experienced|an?) (?:and [\w-]+ )?on-?site (?:[A-Z]?[\w./+-]+ ){0,3}(?:engineer|developer|analyst|tester|"
+                            r"specialist|consultant|administrator)\b|\b(?:this is|it is|is) an? (?:(?:full|part)[- ]time,? |permanent,? |contract,? )*(?:on[- ]?site|"
                             r"in[- ]office|in[- ]person|office[- ]based) (?:role|position|job|opportunity)\b|"
                             r"\b(?:this|the) (?:(?:full|part)[- ]time,? |permanent,? )*(?:on[- ]?site|in[- ]office|in[- ]person)"
                             r"\b[^.]{0,50}\b(?:role|position|job)\b|\b(?:isn['\u2019]?t|is not) a remote\b|"
@@ -1287,6 +1300,9 @@ def decide_work(row, title, desc, page_tag="", remote_hit=False):
     loc_remote = "remote" in loc.lower() or str(row.get("is_remote")).lower() == "true" \
         and text(row.get("site")) != "linkedin"
     head_remote = loc_remote or "remote" in title.lower() or page_tag == "Remote"
+    if len(desc.strip()) < 30 and re.search(r"appointment setter|cold caller|closer|setter\b|telemarket|sales (?:rep|agent)",
+                                            title, re.I):
+        return "Not confirmed"                 # no job text to check pay / commission: never pitched blind
     d = (title + " " + desc).lower()
     d_job = NOT_JOB_REMOTE_RE.sub(" ", d)                  # drop "remote sensing", "not remote" ...
     rem = bool(CLEAR_REMOTE_RE.search(d_job))
