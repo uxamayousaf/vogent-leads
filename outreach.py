@@ -8,6 +8,7 @@ Your LinkedIn account is never used. You only edit the SETTINGS section.
 """
 import datetime as dt
 import glob
+import hashlib
 import json
 import math
 import unicodedata
@@ -192,6 +193,15 @@ def note_skip(l, reason):
         SKIPPED.append({"reason": reason, "title": l.get("title", ""), "company": l.get("company", ""),
                         "url": l.get("url", ""), "category": l.get("category", ""), "size": l.get("size", ""),
                         "source": l.get("source", "LinkedIn")})
+
+
+def job_key(url):
+    """One key per job post (its link), so the same job is never pitched twice, even after 45 days."""
+    return "JOB|" + hashlib.md5(str(url or "").split("?")[0].rstrip("/").encode()).hexdigest()[:16]
+
+
+def is_reddit(l):
+    return str(l.get("site") or "") == "reddit"
 
 
 def is_simplyhired(l):
@@ -485,6 +495,8 @@ UPWORK_ACTOR = "flash_mage~upwork"
 UPWORK_QUERIES = ["GoHighLevel", "HighLevel", "GHL"]   # Upwork: GoHighLevel jobs only
 UPWORK_LIMIT = 45                        # newest GHL jobs checked per day (about $0.15; fits Apify's free $5 a month)
 UPWORK_COST_CAP_USD = 0.15
+RECONTACT_DAYS = 45                      # from 27 Nov: a company that posts a NEW job 45+ days after we contacted it
+                                         # can be contacted again (never after a reply, opt-out or bounce)
 UPWORK_RECONTACT_DAYS = 30               # a past Upwork client posting a NEW GHL job after 30+ days is contacted again
 FOUNDER_LOOKUP = False                   # paid founder search off: you find founders on LinkedIn ("Find founder" link)
 GHL_SKILLS = [("funnels", ["funnel"]), ("workflows", ["workflow", "automation"]), ("pipelines", ["pipeline"]),
@@ -1277,9 +1289,11 @@ def build_email(lead, email, kind, first=""):
     subject = f"{role} opening at {company}" if len(role) <= 40 and len(company) <= 40 \
         else f"Your open role at {company}"
 
-    fit = (f"We have candidates with experience in {skills} who could be a good fit for what you're "
-           f"looking for, at a much lower cost than a local hire.") if skills else \
-        "We have candidates who could be a good fit for what you're looking for, at a much lower cost than a local hire."
+    ly = like_yours(lead)                         # from 27 Nov: " for a real estate team like yours" when clear
+    target = ly[1:] if ly else "for what you're looking for"
+    fit = (f"We have candidates with experience in {skills} who could be a good fit {target}, at a much lower cost "
+           f"than a local hire.") if skills else \
+        f"We have candidates who could be a good fit {target}, at a much lower cost than a local hire."
     body1 = (f"{hi}\n\nI noticed {company} is hiring for {article(role)} and thought I'd reach out.\n\n"
              f"I run Vogent Labs, where we help businesses hire dedicated remote professionals. {fit}\n\n"
              f"We handle the staffing and payroll on our end, so you can focus on getting the right person "
@@ -1304,6 +1318,59 @@ def build_email(lead, email, kind, first=""):
     subject = subject[:1].upper() + subject[1:]
     return subject, body1, [fu1, fu2, fu3], variant
 
+
+
+# ---------- Industry line (from 27 Nov) ----------
+# "...who could be a good fit for a real estate team like yours". Only when the industry is clear from the company's
+# LinkedIn industry, its name, or the post saying what the company is. Otherwise the message stays as before.
+INDUSTRIES = [
+    ("a real estate team", r"real estate|realty|realtor|brokerage|property management|properties\b|homes\b|mortgage broker"),
+    ("a med spa", r"med ?spa|medical spa|aesthetic|botox|injectables|laser clinic"),
+    ("a dental practice", r"\bdental\b|dentist|orthodont"),
+    ("a clinic", r"chiropract|physical therapy|physiotherapy|wellness clinic|\bclinic\b"),
+    ("a coaching business", r"\bcoach(?:es|ing)?\b|consultanc|course creator|online course"),
+    ("a marketing agency", r"marketing agency|digital agency|advertising agency|ad agency|marketing services|"
+                           r"advertising services|branding agency|creative agency|seo agency|ppc agency"),
+    ("an e-commerce brand", r"e-?commerce|online store|shopify store|\bdtc\b|direct[- ]to[- ]consumer|retail brand"),
+    ("a home services business", r"home services|roofing|\bhvac\b|plumbing|solar|landscaping|pest control|remodel|"
+                                 r"renovation|construction|contractor|cleaning services|painting|flooring"),
+    ("a law firm", r"law firm|legal services|attorney|law practice|\blawyers?\b"),
+    ("an insurance agency", r"insurance agency|insurance brokerage|\binsurance\b"),
+    ("a mortgage team", r"mortgage|lending|loan officer"),
+    ("a software company", r"\bsaas\b|software development|computer software|software company"),
+]
+INDUSTRY_RX = [(phrase, re.compile(rx, re.I)) for phrase, rx in INDUSTRIES]
+# The post must say what the company IS ("We are a real estate team", "our med spa"), not just mention the word
+IS_A_RX = re.compile(r"\b(?:we(?:'re| are)|(?:\w+ )?is|our|my|a (?:fast[- ]growing|growing|leading|boutique|family[- ]owned)|"
+                     r"join (?:our|a))\s+(?:an? |the )?(?:[\w&'-]+ ){0,2}?$", re.I)
+
+
+def industry_of(lead):
+    """'a real estate team', 'a med spa' ... or '' when the industry is not clear."""
+    ind, company = str(lead.get("industry") or ""), str(lead.get("company") or "")
+    for phrase, rx in INDUSTRY_RX:
+        if rx.search(ind):
+            return phrase                               # LinkedIn's own industry label
+    for phrase, rx in INDUSTRY_RX:
+        if phrase != "a marketing agency" and rx.search(company):
+            return phrase                               # "Brightway Realty", "Glow Med Spa"
+        if phrase == "a marketing agency" and re.search(r"\b(?:agency|marketing|media|digital)\b", company, re.I) and \
+                re.search(r"\bagency\b|marketing agency|digital agency", str(lead.get("desc") or ""), re.I):
+            return phrase
+    desc = str(lead.get("desc") or "")[:2500]
+    for phrase, rx in INDUSTRY_RX:
+        hits = list(rx.finditer(desc))
+        if len(hits) >= 3 or any(IS_A_RX.search(desc[max(0, m.start() - 60):m.start()]) and
+                                 not re.search(r"client|customer|partner|serv(?:e|ing)|help(?:ing)?|work(?:ing)? with",
+                                               desc[max(0, m.start() - 60):m.start()], re.I) for m in hits):
+            return phrase
+    return ""
+
+
+def like_yours(lead):
+    """' for a real estate team like yours' or ''."""
+    phrase = industry_of(lead)
+    return f" for {phrase} like yours" if phrase else ""
 
 
 # ---------- Version B (new templates, from 12 Nov 2026) ----------
@@ -1356,8 +1423,11 @@ def b_linkedin(lead, first, role=None, skills=None):
     company = clean_company(lead["company"])
     hours = HOURS.get(lead.get("region"), "US hours")
     hi = f"Hi {first}," if first else "Hi,"
-    note = f"{hi} saw {company} is hiring {article(role)}. I have {b_candidate(lead, skills)} who could be a fit. " \
-           f"Would be good to connect!"
+    note = f"{hi} saw {company} is hiring {article(role)}. I have {b_candidate(lead, skills)} who could be a fit" \
+           f"{like_yours(lead)}. Would be good to connect!"
+    if len(note) > 300:                                   # too long with the industry line: without it
+        note = f"{hi} saw {company} is hiring {article(role)}. I have {b_candidate(lead, skills)} who could be a fit. " \
+               f"Would be good to connect!"
     if len(note) > 300:                                   # LinkedIn Premium limit: drop the skills part
         note = f"{hi} saw {company} is hiring {article(role)}. I have {b_candidate(lead, skills, False)} who could " \
                f"be a fit. Would be good to connect!"
@@ -1395,8 +1465,10 @@ def b_email(lead, email, kind, first=""):
     hours = HOURS.get(lead.get("region"), "US hours")
     subject = f"{role} candidate for {company}" if len(role) <= 40 and len(company) <= 40 else \
         f"Candidate for your open role at {company}"
-    body1 = (f"{hi}\n\nSaw {company} is hiring {article(role)}. I have {b_candidate(lead, skills)} who can start "
-             f"right away, working {hours}, typically {saving(lead.get('region'))}.\n\n"
+    ly = like_yours(lead)
+    start = f"who could support {ly[5:]}, starting right away" if ly else "who can start right away"
+    body1 = (f"{hi}\n\nSaw {company} is hiring {article(role)}. I have {b_candidate(lead, skills)} {start}, "
+             f"working {hours}, typically {saving(lead.get('region'))}.\n\n"
              f"Want me to send the profile over?\n\nBest,\n{SIGNATURE}")
     fu1 = (f"{hi}\n\nFollowing up on the {role} position. We recently placed a remote specialist with a US agency, "
            f"and a month in they're very happy with the hire.\n\nThe candidate I mentioned is still available. "
@@ -1441,17 +1513,19 @@ def main():
 
     # Skip companies already queued on an earlier day
     # (checks the new company key and the older one, so nobody contacted before slips through)
-    check = sorted({k for l in ranked[:250] for k in (co_key(l["company"]), norm(l["company"]))})
-    reply = post({"action": "outreach_check", "companies": check})
+    # From 27 Nov: a company contacted 45+ days ago that posts a different job can be contacted again
+    check = sorted({k for l in ranked[:250] for k in (co_key(l["company"]), norm(l["company"]), job_key(l["url"]))})
+    reply = post({"action": "outreach_check", "companies": check, "recontact_days": RECONTACT_DAYS})
     try:
         new_keys = set(json.loads(reply).get("new", []))
     except Exception:
         print("Could not check earlier outreach, continuing:", reply[:200])
         new_keys = set(check)
-    fresh_ranked = [l for l in ranked if co_key(l["company"]) in new_keys and norm(l["company"]) in new_keys]
+    is_new = lambda l: co_key(l["company"]) in new_keys and norm(l["company"]) in new_keys and job_key(l["url"]) in new_keys
+    fresh_ranked = [l for l in ranked if is_new(l)]
     contacted_before = len(ranked) - len(fresh_ranked)          # for the daily summary
     for l in ranked:
-        if not (co_key(l["company"]) in new_keys and norm(l["company"]) in new_keys):
+        if not is_new(l):
             note_skip(l, "Already contacted before")
     # ----- Upwork first: it gets the Apify budget before LinkedIn founders -----
     up = upwork_leads(today, 0)
@@ -1479,7 +1553,7 @@ def main():
             "dm_url": p["url"] if p else founder_search_url(l["company"], l.get("company_url", "")),
             "dm_title": p["title"] if p else "",
             "channel": "LinkedIn", "email": "", "note": note, "followup": li[0], "messages": [note] + li,
-            "email_status": ""})
+            "email_status": "", "recontact_days": RECONTACT_DAYS, "job_key": job_key(l["url"])})
     print(f"SimplyHired GoHighLevel rows: {len(sh_rows)}")
     sh_new = {co_key(l["company"]) for l in sh_leads}
     for l in all_leads:                              # SimplyHired jobs that did not make the Outreach tab, and why
@@ -1503,8 +1577,9 @@ def main():
     # Unknown-size companies can get an email too (only clearly remote leads reach this list).
     pre_email = {}
     if cap:
-        order = sorted(range(len(fresh_ranked)),
-                       key=lambda k: (0 if fresh_ranked[k].get("region") in EMAIL_REGION_FIRST else 1, k))
+        order = sorted(range(len(fresh_ranked)),          # Reddit leads first (they need a contact), then regions
+                       key=lambda k: (0 if is_reddit(fresh_ranked[k]) else 1,
+                                      0 if fresh_ranked[k].get("region") in EMAIL_REGION_FIRST else 1, k))
         for k in order:
             if len(pre_email) >= cap or looked >= EMAIL_LOOKUP_MAX:
                 break
@@ -1530,6 +1605,10 @@ def main():
                 continue
             unknown_n += 1
         email, kind = pre_email.get(i, ("", "")) if emailed < cap else ("", "")
+        if is_reddit(l) and not email and not slug(l.get("company_url")):
+            note_skip(l, "Reddit: no email or LinkedIn page found")
+            unknown_n -= 1 if l.get("size_min") is None else 0
+            continue                                     # Reddit: only added when a contact is found
         p = free_founder(l["company"], l.get("people"))
         found_n += 1 if p else 0
         base = {
@@ -1548,6 +1627,8 @@ def main():
             "dm_name": p["name"] if p else "Find founder ↗",
             "dm_url": p["url"] if p else founder_search_url(l["company"], l.get("company_url", "")),
             "dm_title": p["title"] if p else "",
+            "recontact_days": RECONTACT_DAYS,           # a new job 45+ days later may be pitched again
+            "job_key": job_key(l["url"]),               # the same job is never pitched twice
         }
         if email:
             first = p["first"] if (p and kind != "personal") else ""
