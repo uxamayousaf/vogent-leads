@@ -80,7 +80,12 @@ SITES = ["linkedin"]
 GHL_SEARCH_TERMS = {"GoHighLevel", "Go High Level", "GHL", "HighLevel"}   # these also search Indeed (27 Nov)
 INDEED_COUNTRY = {"United States": "USA", "Canada": "Canada", "United Kingdom": "UK", "Australia": "Australia",
                   "New Zealand": "New Zealand", "Ireland": "Ireland", "Singapore": "Singapore"}          # LinkedIn only (Indeed, ZipRecruiter and Google Jobs switched off)
+# From 27 Nov: the GoHighLevel searches also read these job sites, with the same strict checks as Indeed
+GHL_JOB_SITES = ["indeed", "google", "glassdoor", "zip_recruiter"]
+STRICT_SITES = set(GHL_JOB_SITES)                    # the location alone never makes a job remote; must name GHL
+ZIP_COUNTRIES = {"United States", "Canada"}          # ZipRecruiter only lists US and Canadian jobs
 SOURCE_LABELS = {"linkedin": "LinkedIn", "indeed": "Indeed", "zip_recruiter": "ZipRecruiter", "google": "Google Jobs",
+                 "glassdoor": "Glassdoor", "reddit": "Reddit",
                  "remotive": "Remotive", "remoteok": "Remote OK", "wwr": "We Work Remotely", "himalayas": "Himalayas",
                  "jobicy": "Jobicy", "simplyhired": "SimplyHired", "bebee": "beBee"}
 
@@ -127,6 +132,12 @@ CATEGORIES = {
     "Remote Boards": {
         # Remote-first job boards (Remotive, Remote OK, We Work Remotely, Himalayas, Jobicy): free, remote by definition.
         # Back on from 26 Nov for GHL / CRM, tech and automation roles open worldwide; US companies only.
+        "enabled": True, "deep_results": 0, "normal_results": 0, "regions": ["USA"],
+        "deep_searches": [], "searches": [], "must_mention": [],
+    },
+    "Reddit GHL": {
+        # Added 27 Nov: Reddit posts from businesses that need GoHighLevel help. Free, no account. Kept only when the
+        # post names a company or website and a contact is found (LinkedIn page, website or email). Max 10 a day.
         "enabled": True, "deep_results": 0, "normal_results": 0, "regions": ["USA"],
         "deep_searches": [], "searches": [], "must_mention": [],
     },
@@ -1103,6 +1114,8 @@ def best_category(title, category):
         return "CRM Automation"            # only GoHighLevel posts reach here: client accounts in GHL
     if category in ("CRM Automation", "AI Automation"):
         return category
+    if category == "Reddit GHL":
+        return "CRM Automation"                           # every Reddit lead names GoHighLevel
     if category == "Remote Boards":
         return "CRM Automation" if CRM_BOARD_RE.search(title) else title_category(title)   # GHL / CRM, tech or automation
     if category in OPEN_CATEGORIES:
@@ -1321,16 +1334,18 @@ def decide_work(row, title, desc, page_tag="", remote_hit=False):
     A city location ("Austin, TX, USA", "Dublin, County Dublin, Ireland") without a clear remote phrase -> On-site."""
     if page_tag in ("On-site", "Hybrid"):
         return page_tag
+    if text(row.get("site")) == "reddit":
+        return reddit_work(title, desc)
     loc = text(row.get("location"))
     loc_remote = "remote" in loc.lower() or str(row.get("is_remote")).lower() == "true" \
         and text(row.get("site")) != "linkedin"
-    indeed = text(row.get("site")) == "indeed"
+    indeed = text(row.get("site")) in STRICT_SITES      # Indeed, Google Jobs, Glassdoor, ZipRecruiter
     if indeed:
         if re.search(r"hybrid", loc, re.I):
             return "Hybrid"                    # Indeed "Hybrid remote in Austin, TX"
         if re.search(r"(?i:remote) in [A-Z]", loc):
             return "Not confirmed"             # Indeed "Remote in Dallas, TX": tied to one city, never pitched
-        indeed_remote = bool(re.fullmatch(r"\s*(?:fully )?remote\s*", loc, re.I))
+        indeed_remote = bool(re.fullmatch(r"\s*(?:fully )?(?:remote|anywhere)(?:,? (?:us|usa|united states))?\s*", loc, re.I))
         loc_remote = False                     # the location alone never makes an Indeed job remote
     head_remote = loc_remote or "remote" in title.lower() or page_tag == "Remote"
     if len(desc.strip()) < 30 and re.search(r"appointment setter|cold caller|closer|setter\b|telemarket|sales (?:rep|agent)",
@@ -1655,17 +1670,20 @@ def search(term, n, location, remote=False, cat_name=""):
     frames = []
     sites = ["linkedin"]
     if cat_name == "CRM Automation" and term in GHL_SEARCH_TERMS and location in INDEED_COUNTRY:
-        sites = ["linkedin", "indeed"]                 # from 27 Nov: Indeed too, for the GoHighLevel searches only
+        # from 27 Nov: Indeed, Google Jobs, Glassdoor and ZipRecruiter too, for the GoHighLevel searches only
+        sites = ["linkedin"] + [s for s in GHL_JOB_SITES if s != "zip_recruiter" or location in ZIP_COUNTRIES]
     for site in sites:
         try:
             kw = dict(site_name=[site], search_term=term, location=location, results_wanted=n,
                       hours_old=HOURS_OLD, is_remote=remote)
             if site == "linkedin":
                 kw["linkedin_fetch_description"] = True
-            if site == "indeed":
+            if site in ("indeed", "glassdoor", "zip_recruiter"):
                 kw["country_indeed"] = INDEED_COUNTRY[location]
+            if site in ("glassdoor", "zip_recruiter", "google"):
+                kw["fetch_description"] = True
             if site == "google":
-                kw["google_search_term"] = f"{term} {'remote ' if remote else ''}jobs in United States since yesterday"
+                kw["google_search_term"] = f"{term} {'remote ' if remote else ''}jobs in {location} since yesterday"
             df = scrape_jobs(**kw)
             if site == "linkedin" and (df is None or len(df) == 0):
                 time.sleep(random.uniform(60, 90))      # LinkedIn often answers 0 when it is busy: wait, try once more
@@ -1673,6 +1691,9 @@ def search(term, n, location, remote=False, cat_name=""):
             if df is not None and len(df):
                 df = df.copy()
                 df["site"] = site
+                if site == "google" and "date_posted" in df.columns:   # Google Jobs searched "since yesterday"
+                    today = dt.datetime.now(PKT).strftime("%Y-%m-%d")
+                    df["date_posted"] = df["date_posted"].apply(lambda v: today if not text(v).strip() else v)
                 frames.append(df)
             print(f"  {site} | {term}{' | remote filter' if remote else ''}: {0 if df is None else len(df)} jobs")
         except Exception as e:
@@ -1991,12 +2012,223 @@ def remote_boards():
         # jobs LinkedIn returned for its Remote filter (one signal, not proof on its own)
 
 
+# ---------- Reddit: businesses asking for GoHighLevel help (from 27 Nov) ----------
+REDDIT_SUBS = ["gohighlevel", "forhire", "smallbusiness", "realestate", "Entrepreneur", "marketing"]
+REDDIT_QUERY = 'gohighlevel OR "go high level" OR highlevel OR ghl'
+REDDIT_MAX_DAILY = 10
+REDDIT_HOURS = 72                                     # posted in the last 3 days
+REDDIT_UA = {"User-Agent": "python:vogent-lead-finder:1.0", "Accept": "application/json"}
+REDDIT_STATS = {"read": 0, "recent": 0, "ghl": 0, "hiring": 0, "named": 0, "status": {}}
+# A real request for help or a hire
+REDDIT_HIRE_RE = re.compile(r"\[\s*hiring\s*\]|\bhiring\b|\bwe(?:'re| are) looking for\b|\blooking (?:to hire|for (?:a|an|someone|"
+                            r"somebody|help|an? (?:expert|freelancer|specialist|developer|dev|consultant|pro|contractor|va)))\b|"
+                            r"\bneed(?:ing)? (?:a|an|someone|somebody|help|an? expert)\b|\bseeking (?:a|an|someone)\b|"
+                            r"\b(?:want|wanting|looking) to (?:hire|bring on|outsource)\b|\bwho can (?:help|build|set ?up|fix|manage)\b|"
+                            r"\b(?:paid|budget|compensation|hourly rate|per hour|/hr)\b", re.I)
+# People selling services, tools or courses (never pitched)
+REDDIT_OFFER_RE = re.compile(r"\[\s*for hire\s*\]|\bfor hire\b|\bhire me\b|\bi will (?:build|set ?up|create|do|help)\b|"
+                             r"\bi(?:'ll| can) (?:build|set ?up|create|help you|do (?:it|this) for)\b|\bmy services\b|"
+                             r"\bwe offer\b|\boffering (?:my|our)\b|\bavailable for (?:hire|work|projects|new clients)\b|"
+                             r"\blooking for (?:new )?(?:clients|work|projects|gigs)\b|\bfor sale\b|\bselling\b|\baffiliate\b|"
+                             r"\bcoupon\b|\bpromo code\b|\bdiscount code\b|\bfree trial\b|\bwhite[- ]label\b|\bsnapshots? for\b", re.I)
+REDDIT_REMOTE_RE = re.compile(r"\bremote(?:ly)?\b|\bfreelanc\w*|\bcontract(?:or)?\b|\bonline\b|\bvirtual\b|\bwork from home\b|"
+                              r"\bwfh\b|\bfrom anywhere\b|\basync\b|\bpart[- ]time\b|\bproject[- ]based\b|\bupwork\b", re.I)
+REDDIT_LOCAL_RE = re.compile(r"\bin[- ]person\b|\bin[- ]office\b|\bon[- ]?site\b|\blocal (?:only|candidates|people|to)\b|"
+                             r"\bmust (?:be|live) (?:local|in|near)\b|\bcome (?:in|into) (?:the|our) office\b", re.I)
+# Websites that never identify the business (Reddit, social sites, tools, file hosts)
+REDDIT_SKIP_DOMAINS = re.compile(r"reddit|redd\.it|imgur|youtube|youtu\.be|facebook|fb\.com|instagram|linkedin|twitter|x\.com|"
+                                 r"tiktok|gohighlevel|highlevel|leadconnector|msgsndr|google|loom|calendly|zapier|make\.com|"
+                                 r"upwork|fiverr|onlinejobs|gmail|yahoo|outlook|hotmail|icloud|bit\.ly|tinyurl|canva|notion|"
+                                 r"figma|dropbox|docs\.|forms\.|typeform|jotform|wix\.com|squarespace\.com|shopify\.com|"
+                                 r"wordpress\.(?:com|org)|clickfunnels|kajabi|stripe|paypal|github|medium\.com|discord|t\.me|"
+                                 r"whatsapp|wa\.me|example|hubspot|salesforce|openai|chatgpt|amazon|apple\.com|microsoft", re.I)
+TLD_REGION = [(r"\.co\.uk$|\.uk$", "UK"), (r"\.com\.au$|\.au$", "Australia"), (r"\.co\.nz$|\.nz$", "New Zealand"),
+              (r"\.ca$", "Canada"), (r"\.ie$", "Ireland"), (r"\.com\.sg$|\.sg$", "Singapore")]
+US_MENTION_RE = re.compile(r"\b(?:usa|u\.s\.a?\.?|united states|american|est|pst|cst|mst|eastern time|pacific time|central time|"
+                           r"" + US_STATES + r")\b", re.I)
+
+
+def reddit_work(title, desc):
+    """Reddit posts: Remote only when the post says remote / freelance / contract / online (or a [Hiring] post in
+    r/forhire); office or local wording wins; nothing said -> 'Not confirmed' (never pitched)."""
+    d = title + " " + desc
+    if CLEAR_HYBRID_RE.search(d):
+        return "Hybrid"
+    if REDDIT_LOCAL_RE.search(d) or HARD_ONSITE_RE.search(d):
+        return "On-site"
+    if REDDIT_REMOTE_RE.search(d) or re.search(r"\[\s*hiring\s*\]", title, re.I) and "r/forhire" in desc:
+        return "Remote"
+    return "Not confirmed"
+
+
+def reddit_company(text_):
+    """(company name, website) the post itself states, or ('', ''). A website on the business's own domain first,
+    then an email domain, then 'Company: X' or a name ending in LLC / Inc / Realty / Agency ..."""
+    for m in re.finditer(r"(?:https?://)?(?:www\.)?((?:[a-z0-9-]{2,40}\.)+(?:com|co|io|net|org|us|ai|agency|marketing|biz|pro|"
+                         r"app|health|law|realty|homes|ca|uk|au|nz|ie|sg))\b(?![@\w-]|\.\w)", text_, re.I):
+        dom = m.group(1).lower()
+        before = text_[max(0, m.start() - 1):m.start()]
+        if before == "@" or REDDIT_SKIP_DOMAINS.search(dom):
+            continue
+        stem = re.sub(r"\.(?:com|co|net|org|io|ai)(?:\.[a-z]{2})?$|\.[a-z]{2,10}$", "", dom).split(".")[-1]
+        if len(stem) < 3:
+            continue
+        return name_for_domain(stem, text_), "https://" + dom
+    for m in re.finditer(r"\b[\w.+-]+@((?:[a-z0-9-]{2,40}\.)+[a-z]{2,10})\b", text_, re.I):
+        dom = m.group(1).lower()
+        if not REDDIT_SKIP_DOMAINS.search(dom):
+            stem = re.sub(r"\.(?:com|co|net|org|io|ai)(?:\.[a-z]{2})?$|\.[a-z]{2,10}$", "", dom).split(".")[-1]
+            if len(stem) >= 3:
+                return name_for_domain(stem, text_), "https://" + dom
+    m = re.search(r"(?im)^\s*(?:company|business|brand)\s*(?:name)?\s*:\s*([A-Z][\w&'. -]{1,50}?)\s*$", text_) or \
+        re.search(r"\b([A-Z][\w&'.-]*(?:\s+[A-Z&][\w&'.-]*){0,3}\s+(?:LLC|Inc\.?|Ltd\.?|Realty|Agency|Media|Marketing|"
+                  r"Group|Homes|Properties|Solutions|Consulting|Studio|Labs|Wellness|Clinic|Med ?Spa))\b", text_)
+    if m:
+        name = re.sub(r"\s+", " ", m.group(1)).strip(" .,:")
+        if len(name) >= 3 and not re.match(r"(?i)(?:the|a|an|my|our|this|we|i)\b", name) and not GHL_RE.search(name):
+            return name, ""
+    return "", ""
+
+
+def name_for_domain(stem, text_):
+    """'brightwayrealty' -> 'Brightway Realty' when the post spells the name out; else 'Brightway-realty' -> words."""
+    want = re.sub(r"[^a-z0-9]", "", stem.lower())
+    for m in re.finditer(r"\b[A-Z][\w&'.]*(?:\s+[A-Z&][\w&'.]*){0,4}", text_):
+        words = m.group(0).split()
+        for i in range(len(words)):
+            for j in range(i + 1, len(words) + 1):
+                cand = " ".join(words[i:j])
+                if re.sub(r"[^a-z0-9]", "", cand.lower()) == want:
+                    return cand
+    return " ".join(w.capitalize() for w in re.split(r"[-_]", stem) if w)
+
+
+def reddit_region(hq, website, text_):
+    """Region from the company's LinkedIn head office (English-speaking markets only). No head office: the website
+    ending (.co.uk, .com.au ...), else USA when the post mentions the US. '' = not a target country (skipped)."""
+    if hq:
+        for reg in ("Canada", "UK", "Australia", "New Zealand", "Ireland", "Singapore"):
+            if (CANADA_HQ_RE if reg == "Canada" else UK_HQ_RE if reg == "UK" else REGION_HQ_RE[reg]).search(hq):
+                return reg
+        return "USA" if US_HQ_RE.search(hq) else ""
+    host = root_host(website)
+    for rx, reg in TLD_REGION:
+        if host and re.search(rx, host):
+            return reg
+    return "USA" if US_MENTION_RE.search(text_) else ""
+
+
+def root_host(url):
+    return re.sub(r"^https?://(?:www\.)?", "", str(url or "")).split("/")[0].lower()
+
+
+def reddit_clean_title(title):
+    t = re.sub(r"^\s*(?:\[[^\]]{1,20}\]\s*)+", "", str(title or "")).strip(" -|:")
+    return (t[:117].rsplit(" ", 1)[0] + "...") if len(t) > 120 else (t or "GoHighLevel help needed")
+
+
+def reddit_role(text_):
+    """Role used in the messages (Reddit titles are questions, not job titles). Never 'VA'."""
+    if re.search(r"\b(?:developer|dev|engineer|coder|programmer)\b", text_, re.I):
+        return "GoHighLevel Developer"
+    if re.search(r"\b(?:assistant|\bva\b|admin)\b", text_, re.I):
+        return "GoHighLevel Assistant"
+    return "GoHighLevel Specialist"
+
+
+def reddit_posts(sub):
+    """New posts for one subreddit: the JSON feed first, the RSS feed if JSON is blocked. [] if both fail."""
+    from urllib.parse import quote
+    base = f"https://www.reddit.com/r/{sub}"
+    urls = [f"{base}/new.json?limit=100"] if sub == "gohighlevel" else \
+        [f"{base}/search.json?q={quote(REDDIT_QUERY)}&restrict_sr=1&sort=new&t=week&limit=100"]
+    urls.append(urls[0].replace("www.reddit.com", "old.reddit.com"))
+    for url in urls:
+        try:
+            r = requests.get(url, headers=REDDIT_UA, timeout=25)
+            REDDIT_STATS["status"][r.status_code] = REDDIT_STATS["status"].get(r.status_code, 0) + 1
+            if r.status_code == 200 and r.text.lstrip().startswith("{"):
+                return [c.get("data", {}) for c in r.json().get("data", {}).get("children", [])]
+        except Exception:
+            pass
+        time.sleep(2)
+    rss = urls[0].replace(".json", ".rss")                 # RSS: title, text, link, date, no score
+    try:
+        r = requests.get(rss, headers={"User-Agent": REDDIT_UA["User-Agent"]}, timeout=25)
+        REDDIT_STATS["status"][f"rss {r.status_code}"] = REDDIT_STATS["status"].get(f"rss {r.status_code}", 0) + 1
+        out = []
+        for e in re.findall(r"<entry>(.*?)</entry>", r.text if r.status_code == 200 else "", re.S):
+            tag = lambda t: (re.search(rf"<{t}[^>]*>(.*?)</{t}>", e, re.S) or [None, ""])[1]
+            link_ = re.search(r'<link href="([^"]+)"', e)
+            body = re.sub(r"<[^>]+>", " ", tag("content").replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&"))
+            when = ""
+            try:
+                when = dt.datetime.fromisoformat(tag("updated").replace("Z", "+00:00")).timestamp()
+            except Exception:
+                pass
+            out.append({"title": re.sub(r"<[^>]+>", "", tag("title")).replace("&amp;", "&"), "selftext": body,
+                        "permalink": link_.group(1) if link_ else "", "created_utc": when, "id": tag("id")})
+        return out
+    except Exception:
+        return []
+
+
+def reddit_ghl():
+    """Reddit posts from the last 3 days where a business asks for GoHighLevel help and names its company or website.
+    Everything else (people offering services, questions, tutorials, posts with only a username) is dropped."""
+    import pandas as pd
+    cutoff = time.time() - REDDIT_HOURS * 3600
+    rows, seen = [], set()
+    for sub in REDDIT_SUBS:
+        for p in reddit_posts(sub):
+            pid = str(p.get("id") or p.get("permalink") or "")
+            if not pid or pid in seen:
+                continue
+            seen.add(pid)
+            REDDIT_STATS["read"] += 1
+            try:
+                if float(p.get("created_utc") or 0) < cutoff:
+                    continue
+            except (TypeError, ValueError):
+                continue
+            REDDIT_STATS["recent"] += 1
+            title, body = str(p.get("title") or ""), str(p.get("selftext") or "")
+            blob = title + "\n" + body
+            if not GHL_RE.search(blob):
+                continue
+            REDDIT_STATS["ghl"] += 1
+            if sub == "forhire" and not re.search(r"\[\s*hiring\s*\]", title, re.I):
+                continue                                   # r/forhire: [Hiring] posts only
+            if REDDIT_OFFER_RE.search(blob) or not REDDIT_HIRE_RE.search(blob):
+                continue                                   # selling services, or no real request for help
+            REDDIT_STATS["hiring"] += 1
+            if reddit_work(title, blob + f"\n(posted in r/{sub})") != "Remote":
+                continue                                   # office, hybrid or not said: never pitched
+            company, website = reddit_company(blob)
+            if not company:
+                continue                                   # only a username: we can't reach them automatically
+            REDDIT_STATS["named"] += 1
+            link_ = str(p.get("permalink") or "")
+            url = link_ if link_.startswith("http") else "https://www.reddit.com" + link_
+            rows.append({"site": "reddit", "id": f"reddit:{pid}", "job_url": url,
+                         "title": reddit_clean_title(title), "company": company,
+                         "description": blob + f"\n(posted in r/{sub})", "location": "",
+                         "date_posted": dt.datetime.fromtimestamp(float(p.get("created_utc")), dt.timezone.utc)
+                         .strftime("%Y-%m-%d"), "company_url": "", "company_url_direct": website,
+                         "is_remote": False, "company_industry": "", "company_num_employees": "",
+                         "reddit_role": reddit_role(blob)})
+        time.sleep(2)
+    print(f"Reddit GHL: {len(rows)} posts kept | {REDDIT_STATS}")
+    return pd.DataFrame(rows) if rows else None
+
+
 def main():
     found = {}
     checked, ex_agency, ex_big, ex_lang, ex_incomplete, ex_loc = set(), set(), set(), set(), set(), set()
     ex_senior, ex_role = set(), set()                       # skip reasons, shown in the Run Log
     wt_checked, wt_confirmed = set(), set()                 # work type read from LinkedIn's job page
     companies_today = set()
+    reddit_kept = 0                                         # Reddit leads today (max REDDIT_MAX_DAILY)
     ran = []
 
     for region_name, rcfg in REGIONS.items():
@@ -2020,6 +2252,9 @@ def main():
 
             if cat_name == "Remote Boards":
                 terms = [("remote job boards", 0)]
+            rd_cat = cat_name == "Reddit GHL"
+            if rd_cat:
+                terms = [("reddit", 0)]
             sh_cat = cat_name == "SimplyHired GHL"
             if sh_cat:
                 terms = [("gohighlevel", 0)]
@@ -2027,11 +2262,11 @@ def main():
                 (EU_LOCATIONS if region_name == "Sweden" and cfg.get("eu_search") else [])
             for location, short in list(rcfg["locations"]) + list(extra_locs):
                 extra_loc = (location, short) in extra_locs     # e.g. LinkedIn's "Worldwide" location
-                passes = (True,) if cat_name == "Remote Boards" or extra_loc or sh_cat or cfg.get("remote_only") \
-                    else (True, False)
+                passes = (True,) if cat_name == "Remote Boards" or extra_loc or sh_cat or rd_cat or \
+                    cfg.get("remote_only") else (True, False)
                 for term, n, remote_pass in [(t, k, rp) for t, k in terms for rp in passes]:
                     df = remote_boards() if cat_name == "Remote Boards" else simplyhired_ghl() if sh_cat else \
-                        search(term, n, location, remote_pass, cat_name)
+                        reddit_ghl() if rd_cat else search(term, n, location, remote_pass, cat_name)
                     if remote_pass and df is not None and len(df):
                         REMOTE_FILTER_IDS.update(job_id_of(r) for _, r in df.iterrows())
                     if df is None or not len(df):
@@ -2053,25 +2288,28 @@ def main():
                         desc = text(row.get("description"))
                         industry = text(row.get("company_industry"))
 
-                        flex = flexible_title(title, cat_name, desc)
-                        crm_mgr = (is_senior(title) and crm_manager_title(title, cat_name)) or flex
+                        rd_row = text(row.get("site")) == "reddit"
+                        # Reddit titles are questions, not job titles: the role checks use the GHL role instead
+                        role_title = text(row.get("reddit_role")) if rd_row else title
+                        flex = flexible_title(role_title, cat_name, desc)
+                        crm_mgr = (is_senior(role_title) and crm_manager_title(role_title, cat_name)) or flex
                         # "Manager" (only) for any role: 1-10 staff and a strong worldwide hiring signal
-                        ww_mgr = bool(is_senior(title) and not crm_mgr and manager_only(title)
+                        ww_mgr = bool(is_senior(role_title) and not crm_mgr and manager_only(role_title)
                                       and MANAGER_SIGNAL_RE.search(desc))
                         # A job that names GoHighLevel: any title (on LinkedIn the 1-50 staff limit still applies)
                         ghl_any = bool(sh_cat or GHL_RE.search(title + " " + desc)
                                        or (on_li_site(row) and HUBSPOT_RE.search(title + " " + desc)))
-                        if ghl_any and is_senior(title) and not crm_mgr and not sh_cat:
+                        if ghl_any and is_senior(role_title) and not crm_mgr and not sh_cat:
                             crm_mgr = True                               # size checked below (1-50 staff)
-                        if tech_senior(title) and not crm_mgr:
+                        if tech_senior(role_title) and not crm_mgr:
                             crm_mgr = True                               # Senior / Lead developer: 1-50 staff only
-                        if is_senior(title) and not crm_mgr and not ww_mgr and not sh_cat:
+                        if is_senior(role_title) and not crm_mgr and not ww_mgr and not sh_cat:
                             ex_senior.add(key)
                             skip_note(row, title, desc, company, cat_name, "Senior title", remote_pass)
                             continue
                         on_linkedin = text(row.get("site")) in ("linkedin", "")
                         widened = False          # kept although it is not this search's role (labelled by title)
-                        if (hard_no(title, desc, ghl=True) if ghl_any else wrong_title(title, cat_name, desc)) and not flex:
+                        if (hard_no(role_title, desc, ghl=True) if ghl_any else wrong_title(title, cat_name, desc)) and not flex:
                             if on_linkedin and cat_name not in OPEN_CATEGORIES and cat_name != "Remote Boards" \
                                     and not hard_no(title, desc):
                                 widened = True
@@ -2092,10 +2330,10 @@ def main():
                             ex_role.add(key)
                             skip_note(row, title, desc, company, cat_name, "AI gig marketplace / contributor gig", remote_pass)
                             continue
-                        if text(row.get("site")) == "indeed" and not GHL_RE.search(title + " " + desc):
+                        if text(row.get("site")) in STRICT_SITES and not GHL_RE.search(title + " " + desc):
                             ex_role.add(key)
-                            continue                                     # Indeed: genuine GoHighLevel posts only
-                        if text(row.get("site")) not in ("linkedin", "", "indeed") and not sh_cat and \
+                            continue                                     # Indeed, Google, Glassdoor, Zip: genuine GHL posts only
+                        if text(row.get("site")) not in ({"linkedin", "", "reddit"} | STRICT_SITES) and not sh_cat and \
                                 not (CRM_TITLE_RE.search(title) or GHL_RE.search(title)) and \
                                 not (text(row.get("site")) in BOARD_SITES and (TECH_TITLE_RE.search(title) or
                                      re.search(r"automation|\bai\b|n8n|zapier", title, re.I))):
@@ -2122,7 +2360,8 @@ def main():
                             skip_note(row, title, desc, company, cat_name, "Agency / recruiter / job board", remote_pass)
                             continue
                         company_url = text(row.get("company_url")).split("?")[0]
-                        if text(row.get("site")) in BOARD_SITES or sh_cat or text(row.get("site")) == "indeed":
+                        if text(row.get("site")) in BOARD_SITES or sh_cat or text(row.get("site")) in STRICT_SITES \
+                                or text(row.get("site")) == "reddit":
                             for cand in linkedin_company_guesses(company):   # find the company's LinkedIn page
                                 company_size(cand, row)
                                 if COMPANY_HQ.get(cand):
@@ -2141,7 +2380,22 @@ def main():
                         if is_agency(company, industry, desc, title):
                             ex_agency.add(key)
                             continue                                     # website shows a staffing firm
-                        if (sh_cat or text(row.get("site")) == "indeed") and \
+                        if rd_row:                                   # Reddit: region from head office, contact required
+                            hq = COMPANY_HQ.get(company_url.split("?")[0].rstrip("/"), "")
+                            site_url = website or text(row.get("company_url_direct"))
+                            lead_region = reddit_region(hq, site_url, desc)
+                            if not lead_region:
+                                ex_loc.add(key)
+                                skip_note(row, title, desc, company, cat_name, "Reddit: company not in a target country",
+                                          remote_pass, size_label)
+                                continue
+                            has_mail = bool(re.search(r"\b[\w.+-]+@(?:[a-z0-9-]{2,40}\.)+[a-z]{2,10}\b", desc, re.I))
+                            if not (hq or site_url or has_mail):
+                                ex_incomplete.add(key)
+                                continue                                 # no LinkedIn page, website or email
+                            if reddit_kept >= REDDIT_MAX_DAILY:
+                                continue
+                        if (sh_cat or text(row.get("site")) in STRICT_SITES or rd_row) and \
                                 not COMPANY_HQ.get(company_url.split("?")[0].rstrip("/")):
                             company_url = linkedin_company_search(company)   # page not found: LinkedIn search link
                         max_staff = REGION_MAX_EMPLOYEES.get(lead_region, MAX_EMPLOYEES)
@@ -2153,8 +2407,8 @@ def main():
                         if text(row.get("site")) in BOARD_SITES and not us_company(company_url):
                             ex_loc.add(key)                              # remote boards: US companies only
                             continue
-                        if short != "EU" and foreign_company(company_url, company, region_name,
-                                                             bool(WORLDWIDE_RE.search(desc))) and not sh_cat:
+                        if short != "EU" and not rd_row and foreign_company(company_url, company, region_name,
+                                                                            bool(WORLDWIDE_RE.search(desc))) and not sh_cat:
                             ex_loc.add(key)                              # company based outside the US
                             skip_note(row, title, desc, company, cat_name, f"Company based outside {region_name}",
                                       remote_pass, size_label)
@@ -2179,7 +2433,7 @@ def main():
 
                         p_label, p_rank = priority(title, desc, company, industry)
                         skills = key_skills(title, desc)
-                        role = short_role(title)
+                        role = role_title if rd_row else short_role(title)
                         # Work type: LinkedIn's own tags first, clear wording second
                         page_tag = ""      # LinkedIn hides the tag from automated checks (it only cost requests)
                         wt_checked.add(key)
@@ -2188,6 +2442,7 @@ def main():
                         wtype = decide_work(row, title, desc, page_tag,
                                             remote_pass or job_id_of(row) in REMOTE_FILTER_IDS)
                         companies_today.add(co_key)
+                        reddit_kept += 1 if rd_row else 0
                         found[key] = {
                             "id": key,
                             "posted": posted,
