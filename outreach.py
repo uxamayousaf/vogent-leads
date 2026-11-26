@@ -70,7 +70,9 @@ SPECIALISTS = {
 # ---------- Email (Phase 2, Step B) ----------
 EMAIL_ENABLED = True
 EMAIL_START_DATE = "2026-10-13"          # warm-up: week 1 = 10 a day, week 2 = 20, then 30
-EMAIL_LOOKUP_MAX = 90                    # companies checked for an email address each day
+EMAIL_LOOKUP_MAX = 150                   # companies checked for an email address each day (was 90)
+# Email slots go to these regions first (best reply rates), then the rest in ranking order (from 26 Nov)
+EMAIL_REGION_FIRST = ["Australia", "Singapore", "UK", "New Zealand", "Ireland", "Sweden"]
 SENDER_NAME = "Usama Yousaf"
 SENDER_TITLE = "Founder, Vogent Labs"
 SIGNATURE = f"{SENDER_NAME}\n{SENDER_TITLE}"   # every email; no website line (better for spam filters)
@@ -101,7 +103,7 @@ APIFY_TOKEN = os.environ.get("APIFY_TOKEN", "").strip()
 PKT = dt.timezone(dt.timedelta(hours=5))
 WORK_ORDER = {"Remote": 0, "Remote (LinkedIn filter)": 1, "Not confirmed": 1, "Remote (check)": 1, "Remote (mentioned)": 1, "Not stated": 2, "Hybrid": 3, "On-site": 4}
 OUTREACH_WORK_TYPES = ["Remote"]   # the post itself says remote (never On-site, Hybrid or unconfirmed)
-EMAIL_DAILY = 30                         # new emails per day (best-ranked leads first, any region).
+EMAIL_DAILY = 25                         # new emails per day (best-ranked leads first, any region).
                                          # 22 new + 3 follow-ups each = about 80 sends a day, under the 95 cap
 TITLE_RANK = ["founder", "co-founder", "ceo", "chief executive", "owner", "president",
               "managing director", "principal", "partner", "coo", "general manager"]
@@ -1462,6 +1464,22 @@ def main():
     rows, linkedin_n, emailed, found_n, looked = [], 0, 0, 0, 0
     email_turn = 0                                   # Version A / B balance: B count minus A count (negative = B behind)
     unknown_n = 0
+    # Emails: find addresses first, priority regions first, then everyone else in ranking order.
+    # Unknown-size companies can get an email too (only clearly remote leads reach this list).
+    pre_email = {}
+    if cap:
+        order = sorted(range(len(fresh_ranked)),
+                       key=lambda k: (0 if fresh_ranked[k].get("region") in EMAIL_REGION_FIRST else 1, k))
+        for k in order:
+            if len(pre_email) >= cap or looked >= EMAIL_LOOKUP_MAX:
+                break
+            cand = fresh_ranked[k]
+            if onsite_ask(cand) or not cand.get("website"):
+                continue
+            looked += 1
+            e, kd = find_email(cand.get("website", ""))
+            if e and e.split("@")[-1].lower() not in BLOCKED_DOMAINS:
+                pre_email[k] = (e, kd)
     for i, l in enumerate(fresh_ranked):
         if DAILY_TOTAL and len(rows) >= DAILY_TOTAL:
             for rest in fresh_ranked[i:]:
@@ -1472,12 +1490,7 @@ def main():
                 note_skip(l, "Unknown-size limit (10 a day) reached")
                 continue
             unknown_n += 1
-        email, kind = "", ""
-        if emailed < cap and l.get("size_min") is not None and looked < EMAIL_LOOKUP_MAX and not onsite_ask(l):
-            looked += 1
-            email, kind = find_email(l.get("website", ""))
-            if email and email.split("@")[-1].lower() in BLOCKED_DOMAINS:
-                email, kind = "", ""
+        email, kind = pre_email.get(i, ("", "")) if emailed < cap else ("", "")
         p = free_founder(l["company"], l.get("people"))
         found_n += 1 if p else 0
         base = {
