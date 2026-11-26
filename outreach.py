@@ -49,7 +49,7 @@ NOT_EMPLOYER_NAME_WORDS = ["careers", "jobs", "job board", "jobboard", "hiring",
                            "department", "district", "state of", "commonwealth", "public schools"]
 NOT_EMPLOYER_TITLE_WORDS = ["entry level client", "client relations associate", "booking hotels",
                             "travel agent", "brand ambassador", "commission only", "commission-only"]
-APIFY_DAILY_BUDGET_USD = 0.30            # whole Apify budget per weekday: Upwork first, the rest for LinkedIn founders
+APIFY_DAILY_BUDGET_USD = 0.15            # whole Apify budget per weekday: Upwork first, the rest for LinkedIn founders
 FOUNDER_TITLES = ["Founder", "Co-Founder", "CEO", "Owner", "President", "Managing Director"]
 SPECIALISTS = {
     "Lead Generation": "appointment setters and lead generation specialists",
@@ -483,8 +483,8 @@ def _old_linkedin_company_url(company):
 UPWORK_ENABLED = True
 UPWORK_ACTOR = "flash_mage~upwork"
 UPWORK_QUERIES = ["GoHighLevel", "HighLevel", "GHL"]   # Upwork: GoHighLevel jobs only
-UPWORK_LIMIT = 95                        # newest GHL jobs checked per day (about $0.30, the whole Apify budget)
-UPWORK_COST_CAP_USD = 0.30
+UPWORK_LIMIT = 45                        # newest GHL jobs checked per day (about $0.15; fits Apify's free $5 a month)
+UPWORK_COST_CAP_USD = 0.15
 UPWORK_RECONTACT_DAYS = 30               # a past Upwork client posting a NEW GHL job after 30+ days is contacted again
 FOUNDER_LOOKUP = False                   # paid founder search off: you find founders on LinkedIn ("Find founder" link)
 GHL_SKILLS = [("funnels", ["funnel"]), ("workflows", ["workflow", "automation"]), ("pipelines", ["pipeline"]),
@@ -1201,6 +1201,41 @@ def find_email(website):
 
 
 BLOCKED_DOMAINS = set()                  # bounced or opted-out domains, never emailed again
+FREE_MAIL_RE = re.compile(r"gmail|googlemail|yahoo|outlook|hotmail|live\.|msn\.|icloud|aol\.|proton|gmx|zoho\.com|yandex", re.I)
+JOB_SITE_DOMAIN_RE = re.compile(r"indeed|linkedin|ziprecruiter|glassdoor|greenhouse|lever\.co|workable|bamboohr|jazzhr|"
+                                r"breezy|recruitee|ashby|smartrecruiters|icims|myworkday|upwork|fiverr|simplyhired|"
+                                r"recruit|staffing|talent|hiring|jobs?\b", re.I)
+
+
+def desc_email(desc, company, website=""):
+    """An email address written in the job post ('send your CV to jobs@acme.com'). Kept only when it is on the
+    company's own domain (its website, or a domain that contains the company name). Free mail, job sites,
+    recruiters, no-reply and sales / support inboxes are never used. Returns (email, kind) or ('', '')."""
+    site = root_domain(website)
+    words = [w for w in re.findall(r"[a-z0-9]+", str(company or "").lower())
+             if len(w) >= 4 and w not in ("group", "labs", "media", "agency", "company", "solutions", "services",
+                                          "marketing", "digital", "global", "consulting", "studio", "partners")]
+    for e in EMAIL_RE.findall(str(desc or "")):
+        e = e.strip(".").lower()
+        local, _, dom = e.partition("@")
+        if FREE_MAIL_RE.search(dom) or JOB_SITE_DOMAIN_RE.search(dom) or any(b in dom for b in BAD_DOMAIN):
+            continue
+        if any(b in local for b in BAD_LOCAL) or local in BAD_LOCAL_EXACT or len(local) > 40:
+            continue
+        head = re.split(r"[._-]", local)[0]
+        if any(w in local for w in SKIP_LOCAL_WORDS) and not any(local.startswith(h) for h in HIRING_LOCAL):
+            continue                                   # sales@, support@, billing@ ...
+        if head in ("pr", "press", "media", "news"):
+            continue
+        own = (site and (dom.endswith(site) or site.endswith(dom))) or any(w in dom.replace("-", "") for w in words)
+        if not own:
+            continue
+        if dom.split(".")[0] in BLOCKED_DOMAINS or dom in BLOCKED_DOMAINS:
+            continue
+        kind = "hiring" if (local in HIRING_LOCAL or any(local.startswith(h) for h in HIRING_LOCAL)) else \
+            "general" if local in GENERAL_LOCAL else "personal" if re.fullmatch(r"[a-z]{3,15}(\.[a-z]{2,20})?", local) else "general"
+        return e, kind
+    return "", ""
 
 
 def email_cap(today):
@@ -1474,10 +1509,14 @@ def main():
             if len(pre_email) >= cap or looked >= EMAIL_LOOKUP_MAX:
                 break
             cand = fresh_ranked[k]
-            if onsite_ask(cand) or not cand.get("website"):
+            if onsite_ask(cand) or not (cand.get("website") or EMAIL_RE.search(str(cand.get("desc") or ""))):
                 continue
-            looked += 1
-            e, kd = find_email(cand.get("website", ""))
+            e, kd = "", ""
+            if cand.get("website"):
+                looked += 1
+                e, kd = find_email(cand.get("website", ""))
+            if not e:                                      # from 27 Nov: an address written in the job post itself
+                e, kd = desc_email(cand.get("desc"), cand.get("company"), cand.get("website"))
             if e and e.split("@")[-1].lower() not in BLOCKED_DOMAINS:
                 pre_email[k] = (e, kd)
     for i, l in enumerate(fresh_ranked):
