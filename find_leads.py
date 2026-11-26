@@ -76,7 +76,10 @@ NEW_REGIONS = ["Singapore", "Malaysia", "Australia", "New Zealand", "Ireland", "
 ALL_REGIONS = CORE_REGIONS + NEW_REGIONS
 # English-speaking markets: every role group runs here (from 22 Nov; Malaysia and Europe keep tech + worldwide only)
 ENGLISH_REGIONS = CORE_REGIONS + ["Australia", "New Zealand", "Ireland", "Singapore"]
-SITES = ["linkedin"]          # LinkedIn only (Indeed, ZipRecruiter and Google Jobs switched off)
+SITES = ["linkedin"]
+GHL_SEARCH_TERMS = {"GoHighLevel", "Go High Level", "GHL", "HighLevel"}   # these also search Indeed (27 Nov)
+INDEED_COUNTRY = {"United States": "USA", "Canada": "Canada", "United Kingdom": "UK", "Australia": "Australia",
+                  "New Zealand": "New Zealand", "Ireland": "Ireland", "Singapore": "Singapore"}          # LinkedIn only (Indeed, ZipRecruiter and Google Jobs switched off)
 SOURCE_LABELS = {"linkedin": "LinkedIn", "indeed": "Indeed", "zip_recruiter": "ZipRecruiter", "google": "Google Jobs",
                  "remotive": "Remotive", "remoteok": "Remote OK", "wwr": "We Work Remotely", "himalayas": "Himalayas",
                  "jobicy": "Jobicy", "simplyhired": "SimplyHired", "bebee": "beBee"}
@@ -1293,7 +1296,7 @@ CLEAR_HYBRID_RE = re.compile(r"(?<!not )\bhybrid\b|"
                              r"\b(?:\d|one|two|three)\s*(?:work[- ]from[- ]home|wfh|remote)\s*days\b|"
                              r"\bwork[- ]from[- ]home (?:flexibility|days?) \(?\s*(?:\d|one|two|three)|"
                              r"\bin (?:the )?office \d days\b|\bwork in the office (?:\d|one|two|three)|"
-                             r"\bmust be able to work in the office\b|\b(?:\d|one|two|three|four) days? (?:a|per) week (?:together )?in[- ]person\b|"
+                             r"\bmust be able to work in the office\b|\boffice (?:\d|one|two|three|four) days? (?:a|per) week\b|\b(?:\d|one|two|three|four) days? (?:a|per) week (?:together )?in[- ]person\b|"
                              r"\b(?:\d|one|two|three|four) days? (?:a|per) week together\b|\bspend(?:ing)? (?:some |regular )?time in (?:the|our) office\b|"
                              r"\boffice attendance (?:is )?(?:required|expected)\b|\bin[- ]office,? \w+ (?:through|to|-) \w+day", re.I)
 
@@ -1321,13 +1324,21 @@ def decide_work(row, title, desc, page_tag="", remote_hit=False):
     loc = text(row.get("location"))
     loc_remote = "remote" in loc.lower() or str(row.get("is_remote")).lower() == "true" \
         and text(row.get("site")) != "linkedin"
+    indeed = text(row.get("site")) == "indeed"
+    if indeed:
+        if re.search(r"hybrid", loc, re.I):
+            return "Hybrid"                    # Indeed "Hybrid remote in Austin, TX"
+        if re.search(r"(?i:remote) in [A-Z]", loc):
+            return "Not confirmed"             # Indeed "Remote in Dallas, TX": tied to one city, never pitched
+        indeed_remote = bool(re.fullmatch(r"\s*(?:fully )?remote\s*", loc, re.I))
+        loc_remote = False                     # the location alone never makes an Indeed job remote
     head_remote = loc_remote or "remote" in title.lower() or page_tag == "Remote"
     if len(desc.strip()) < 30 and re.search(r"appointment setter|cold caller|closer|setter\b|telemarket|sales (?:rep|agent)",
                                             title, re.I):
         return "Not confirmed"                 # no job text to check pay / commission: never pitched blind
     d = (title + " " + desc).lower()
     d_job = NOT_JOB_REMOTE_RE.sub(" ", d)                  # drop "remote sensing", "not remote" ...
-    rem = bool(CLEAR_REMOTE_RE.search(d_job))
+    rem = bool(CLEAR_REMOTE_RE.search(d_job)) or (indeed and indeed_remote)   # Indeed "Remote": office / hybrid wording still wins
     on = any(p in d for p in STRONG_ONSITE) or bool(STRONG_ONSITE_RE.search(d)) or bool(CLEAR_ONSITE_RE.search(d))
     hy = any(p in d for p in STRONG_HYBRID) or bool(CLEAR_HYBRID_RE.search(d))
     if re.search(r"\bon[- ]?site\b|\bin[- ]office\b|\bin[- ]person\b", title, re.I) and "remote" not in title.lower():
@@ -1642,7 +1653,9 @@ def search(term, n, location, remote=False, cat_name=""):
     """GHL / CRM: LinkedIn, Indeed, ZipRecruiter, Google Jobs, beBee and SimplyHired. Every other role: LinkedIn only.
     Each site on its own, so one failing site never stops the others."""
     frames = []
-    sites = SITES if cat_name == "CRM Automation" else ["linkedin"]
+    sites = ["linkedin"]
+    if cat_name == "CRM Automation" and term in GHL_SEARCH_TERMS and location in INDEED_COUNTRY:
+        sites = ["linkedin", "indeed"]                 # from 27 Nov: Indeed too, for the GoHighLevel searches only
     for site in sites:
         try:
             kw = dict(site_name=[site], search_term=term, location=location, results_wanted=n,
@@ -1650,7 +1663,7 @@ def search(term, n, location, remote=False, cat_name=""):
             if site == "linkedin":
                 kw["linkedin_fetch_description"] = True
             if site == "indeed":
-                kw["country_indeed"] = "USA"
+                kw["country_indeed"] = INDEED_COUNTRY[location]
             if site == "google":
                 kw["google_search_term"] = f"{term} {'remote ' if remote else ''}jobs in United States since yesterday"
             df = scrape_jobs(**kw)
@@ -1751,7 +1764,7 @@ def skip_note(row, title, desc, company, cat_name, reason, remote_pass=False, si
                     "source": SOURCE_LABELS.get(text(row.get("site")) or "linkedin", "LinkedIn")})
 SH_DAYS = 7
 SH_ACTOR = "abotapi~simplyhired-com-scraper"     # Apify scraper (SimplyHired blocks direct visits from GitHub)
-SH_BUDGET_USD = 0.10                             # SimplyHired's own daily Apify limit (Upwork keeps its $0.30)
+SH_BUDGET_USD = 0.05                             # SimplyHired's own daily Apify limit (Upwork keeps its $0.30)
 SH_MAX_LISTINGS = 200
 APIFY_TOKEN = os.environ.get("APIFY_TOKEN", "").strip()
 SH_STATS = {"listed": 0, "too_old": 0, "not_remote": 0, "sponsored": 0, "status": ""}
@@ -2079,7 +2092,10 @@ def main():
                             ex_role.add(key)
                             skip_note(row, title, desc, company, cat_name, "AI gig marketplace / contributor gig", remote_pass)
                             continue
-                        if text(row.get("site")) not in ("linkedin", "") and not sh_cat and \
+                        if text(row.get("site")) == "indeed" and not GHL_RE.search(title + " " + desc):
+                            ex_role.add(key)
+                            continue                                     # Indeed: genuine GoHighLevel posts only
+                        if text(row.get("site")) not in ("linkedin", "", "indeed") and not sh_cat and \
                                 not (CRM_TITLE_RE.search(title) or GHL_RE.search(title)) and \
                                 not (text(row.get("site")) in BOARD_SITES and (TECH_TITLE_RE.search(title) or
                                      re.search(r"automation|\bai\b|n8n|zapier", title, re.I))):
@@ -2106,7 +2122,7 @@ def main():
                             skip_note(row, title, desc, company, cat_name, "Agency / recruiter / job board", remote_pass)
                             continue
                         company_url = text(row.get("company_url")).split("?")[0]
-                        if text(row.get("site")) in BOARD_SITES or sh_cat:
+                        if text(row.get("site")) in BOARD_SITES or sh_cat or text(row.get("site")) == "indeed":
                             for cand in linkedin_company_guesses(company):   # find the company's LinkedIn page
                                 company_size(cand, row)
                                 if COMPANY_HQ.get(cand):
@@ -2125,7 +2141,8 @@ def main():
                         if is_agency(company, industry, desc, title):
                             ex_agency.add(key)
                             continue                                     # website shows a staffing firm
-                        if sh_cat and not COMPANY_HQ.get(company_url.split("?")[0].rstrip("/")):
+                        if (sh_cat or text(row.get("site")) == "indeed") and \
+                                not COMPANY_HQ.get(company_url.split("?")[0].rstrip("/")):
                             company_url = linkedin_company_search(company)   # page not found: LinkedIn search link
                         max_staff = REGION_MAX_EMPLOYEES.get(lead_region, MAX_EMPLOYEES)
                         if size_min is not None and size_min > max_staff and not sh_cat:
