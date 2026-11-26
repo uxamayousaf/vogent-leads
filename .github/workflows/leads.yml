@@ -16,16 +16,28 @@ jobs:
     timeout-minutes: 300
     strategy:
       fail-fast: false
-      max-parallel: 10       # 10 searches at once (about 200 searches; the run starts at 3 AM Pakistan time)
+      max-parallel: 10       # 10 searches at once (about 204 searches; the run starts at 3 AM Pakistan time)
       matrix:
         category: ["CRM Automation", "AI Automation", "Email Marketing", "Performance Marketing", "Lead Generation",
                    "SEO", "Website Support", "Design & Video", "Virtual Assistant", "Customer Service",
                    "Bookkeeping", "Social Media", "Content Writing", "General Remote", "Worldwide Hiring",
                    "Tech Web & Mobile", "Tech QA & DevOps", "Tech AI & Data", "SimplyHired GHL", "E-commerce Support",
                    "Video & Content", "No-Code & CRM Tech", "AI & Automation", "Remote Roles", "Design, Product & Delivery",
-                   "Small Business Marketing", "Remote Boards"]
+                   "Small Business Marketing", "Remote Boards", "Reddit GHL"]
         region: ["USA", "Canada", "UK", "Australia", "New Zealand", "Ireland", "Singapore"]   # English-speaking markets: every search
-        exclude:                 # SimplyHired and the remote job boards run once (USA job only)
+        exclude:                 # SimplyHired, the remote job boards and Reddit run once (USA job only)
+          - category: "Reddit GHL"
+            region: "Canada"
+          - category: "Reddit GHL"
+            region: "UK"
+          - category: "Reddit GHL"
+            region: "Australia"
+          - category: "Reddit GHL"
+            region: "New Zealand"
+          - category: "Reddit GHL"
+            region: "Ireland"
+          - category: "Reddit GHL"
+            region: "Singapore"
           - category: "Remote Boards"
             region: "Canada"
           - category: "Remote Boards"
