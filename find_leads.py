@@ -33,7 +33,25 @@ DetectorFactory.seed = 0
 PKT = dt.timezone(dt.timedelta(hours=5))
 HOURS_OLD = 72 if dt.datetime.now(PKT).weekday() == 0 else 48
 MAX_EMPLOYEES = 50      # founder-led small companies only (unknown size is kept, ranked last)
-REGION_MAX_EMPLOYEES = {"Sweden": 200}   # Sweden only (from 23 Nov): up to 200 staff, ranked after 1-50
+REGION_MAX_EMPLOYEES = {"Sweden": 200}
+# LinkedIn lists Europe-wide remote jobs under "European Union" / "EMEA", not a country: searched once (in the Sweden job)
+EU_LOCATIONS = [("European Union", "EU"), ("EMEA", "EU")]
+
+
+def eu_label(hq):
+    """Region label for a job found in the EU / EMEA search, from the company's head office ('' = not a target country)."""
+    for reg in ("Sweden", "Netherlands", "Germany", "Denmark"):
+        if REGION_HQ_RE[reg].search(hq):
+            return reg
+    if UK_HQ_RE.search(hq):
+        return "UK"
+    if REGION_HQ_RE["Ireland"].search(hq):
+        return "Ireland"
+    if US_HQ_RE.search(hq):
+        return "USA"
+    if CANADA_HQ_RE.search(hq):
+        return "Canada"
+    return ""   # Sweden only (from 23 Nov): up to 200 staff, ranked after 1-50
 
 # rank = order in your sheet. scale = fewer results per search for smaller markets.
 # Each location: (LinkedIn search location, short name shown in sheet)
@@ -104,8 +122,9 @@ CATEGORIES = {
         ],
     },
     "Remote Boards": {
-        # Remote-first job boards (switched off: never produced a lead)
-        "enabled": False, "deep_results": 0, "normal_results": 0, "regions": ["USA", "Canada", "UK"],
+        # Remote-first job boards (Remotive, Remote OK, We Work Remotely, Himalayas, Jobicy): free, remote by definition.
+        # Back on from 26 Nov for GHL / CRM, tech and automation roles open worldwide; US companies only.
+        "enabled": True, "deep_results": 0, "normal_results": 0, "regions": ["USA"],
         "deep_searches": [], "searches": [], "must_mention": [],
     },
     "General Remote": {
@@ -126,7 +145,7 @@ CATEGORIES = {
     },
     "Tech Web & Mobile": {
         # Remote tech roles (high value): web and mobile. Senior / Lead / Staff / Principal allowed at 1-50 staff.
-        "enabled": True, "deep_results": 0, "normal_results": 60, "core_results": 80, "regions": ALL_REGIONS, "remote_only": True,
+        "enabled": True, "deep_results": 0, "normal_results": 60, "core_results": 80, "regions": ALL_REGIONS, "remote_only": True, "eu_search": True,
         "deep_searches": [],
         "searches": ["Full Stack Developer", "Full Stack Engineer", "Front End Developer", "Frontend Engineer",
                      "Back End Developer", "Backend Engineer", "Software Engineer", "Software Developer",
@@ -138,7 +157,7 @@ CATEGORIES = {
     },
     "Tech QA & DevOps": {
         # Remote tech roles: testing, DevOps, cloud and platform developers. Same rules as above.
-        "enabled": True, "deep_results": 0, "normal_results": 60, "core_results": 80, "regions": ALL_REGIONS, "remote_only": True,
+        "enabled": True, "deep_results": 0, "normal_results": 60, "core_results": 80, "regions": ALL_REGIONS, "remote_only": True, "eu_search": True,
         "deep_searches": [],
         "searches": ["QA Engineer", "QA Automation Engineer", "SDET", "Test Automation Engineer", "Manual QA Tester",
                      "Software Tester", "DevOps Engineer", "Cloud Engineer", "AWS Engineer",
@@ -147,7 +166,7 @@ CATEGORIES = {
     },
     "Tech AI & Data": {
         # Remote tech roles: AI, data and backend languages. Same rules as above.
-        "enabled": True, "deep_results": 0, "normal_results": 60, "core_results": 80, "regions": ALL_REGIONS, "remote_only": True,
+        "enabled": True, "deep_results": 0, "normal_results": 60, "core_results": 80, "regions": ALL_REGIONS, "remote_only": True, "eu_search": True,
         "deep_searches": [],
         "searches": ["Forward Deployed Engineer", "AI Engineer", "Machine Learning Engineer", "LLM Engineer",
                      "Data Scientist", "Data Engineer", "Data Analyst", "BI Developer", "Power BI Developer",
@@ -182,7 +201,7 @@ CATEGORIES = {
     },
     "AI & Automation": {
         # Added 22 Nov: AI and automation builders (high demand, easy to outsource)
-        "enabled": True, "deep_results": 0, "normal_results": 40, "regions": ALL_REGIONS, "remote_only": True,
+        "enabled": True, "deep_results": 0, "normal_results": 40, "regions": ALL_REGIONS, "remote_only": True, "eu_search": True,
         "deep_searches": [],
         "searches": ["AI Automation Engineer", "Workflow Automation Engineer", "n8n Developer", "Zapier Developer",
                      "Make.com Developer", "AI Agent Developer", "Integration Engineer", "RPA Developer",
@@ -243,7 +262,7 @@ CATEGORIES = {
     "Worldwide Hiring": {
         # Posts that say the company hires outside the US. Also searched in LinkedIn's "Worldwide" location;
         # those results are kept only when the company's head office is in the US.
-        "enabled": True, "deep_results": 0, "normal_results": 40, "core_results": 60, "regions": ALL_REGIONS,
+        "enabled": True, "deep_results": 0, "normal_results": 40, "core_results": 60, "regions": ALL_REGIONS, "eu_search": True,
         "deep_searches": [],
         "searches": ["anywhere in the world", "remote global", "remote international", "independent contractor",
                      "remote LATAM", "remote Philippines", "offshore", "any time zone", "work from anywhere",
@@ -393,7 +412,7 @@ AGENCY_BLOCKLIST = [
     "belay", "boldly", "wing assistant", "prialto", "time etc", "virtual staff finder",
     "hire overseas", "remote staff", "outsource", "upwork", "fiverr",
     "teleperformance", "concentrix", "alorica", "ttec", "sitel", "foundever",
-    "hays", "reed", "michael page", "page group", "talution", "presales collective",
+    "hays", "reed", "michael page", "page group", "talution", "presales collective", "people force",
 ]
 AGENCY_NAME_WORDS = [
     "staffing", "recruit", "talent", "placement", "workforce", "personnel",
@@ -401,7 +420,8 @@ AGENCY_NAME_WORDS = [
 ]
 AGENCY_PHRASES = [
     "our client", "on behalf of our client", "on behalf of a client", "our partner is a", "our partner is an",
-    "onsite/offshore", "onsite / offshore", "c2c", "corp to corp", "corp-to-corp",
+    "onsite/offshore", "onsite / offshore", "c2c", "corp to corp", "corp-to-corp", "our talent partner",
+    "recruitment revolution",
     "for a client of ours", "client of ours", "my client", "on behalf of my client",
 ]
 
@@ -549,7 +569,7 @@ HARD_LOCAL_RE = re.compile(r"american accent|native (?:us|u\.s\.|american) engli
                            r"\bremote (?:with)?in (?:the state of )?(?:california|texas|florida|new york|ontario|quebec|alberta|"
                            r"british columbia|washington|illinois|georgia|colorado|arizona|ohio|pennsylvania|virginia|"
                            r"north carolina|new jersey|massachusetts|michigan|oregon|utah|nevada|tennessee)\b|"
-                           r"\bvalid (?:work )?visa to work in\b|\bbased in new zealand,? with a valid\b|\(\s*w-?2\b|\bw-?2 contract\b|"
+                           r"\bvalid (?:work )?visa to work in\b|\bremote\s*[-–—,]\s*(?:texas|california|florida|new york|ohio|georgia|illinois|pennsylvania|arizona|colorado|washington|virginia|north carolina|new jersey|massachusetts|michigan|tennessee|utah|oregon|nevada|ontario|alberta|british columbia|quebec)\b|\bbased in new zealand,? with a valid\b|\(\s*w-?2\b|\bw-?2 contract\b|"
                            r"\bresidents only\b|\(\s*in [a-z .]{2,30} only\s*\)|\b(?:remote|open to candidates)[^.]{0,25}\bin "
                            r"(?:canada|the us|the u\.s\.|the uk|texas|california|florida|australia) only\b", re.I)
 # Remote, but only for people in one city ("remote/work-from-home in Fort Worth, Texas", "Remote in Charlotte, NC")
@@ -568,7 +588,7 @@ STATE_LOCK_RE = re.compile(r"\b(?:open to|only|accepting|considering) (?:candida
                            r"uk|us|american|irish|singapore(?:an)?) citizenship\b|"
                            r"\b(?:citizens?|citizenship) or permanent residen\w*\b[^.]{0,30}\b(?:only|required|must)\b", re.I)
 # Commission-only, MLM, "partner / co-founder" and paid-task posts are not real hires
-NOT_A_HIRE_TITLE_RE = re.compile(r"commission|\bprovision\b|co-?founder|\bequity\b|\bpartner\b(?! (?:success|marketing|manager|"
+NOT_A_HIRE_TITLE_RE = re.compile(r"commission|\bprovision\b|training provided|co-?founder|\bequity\b|\bpartner\b(?! (?:success|marketing|manager|"
                                  r"relations|account))|paid (?:data )?task|data task|representative needed|\bcloser\b|"
                                  r"high[- ]ticket|financial (?:professional|advisor|representative)|insurance (?:agent|producer)|"
                                  r"no licen[sc]e|licen[sc]e to start",
@@ -577,7 +597,7 @@ NOT_A_HIRE_DESC_RE = re.compile(r"commission[- ]only|commission[- ]based|100% co
                                 r"equity[- ]only|unpaid|no base (?:pay|salary)|uncapped commission|independent business opportunity|"
                                 r"self[- ]employed[^.\n]{0,40}(?:opportunity|commission|business owner)|provisionsbasis|100 ?% provision|"
                                 r"reine[rn]? provision|uncapped (?:earning|income)|(?:life|health|life & health|insurance) (?:& health )?"
-                                r"insurance licen[sc]e|insurance licen[sc]e|around your studies", re.I)
+                                r"insurance licen[sc]e|around your studies|one[- ]call close|elite closer|protection plans", re.I)
 # IT services firms that resell staff to their clients
 IT_STAFFING_NAME_RE = re.compile(r"\b(?:it solutions|infotech|info tech|technologies|tech solutions|softech|softsol|"
                                  r"technology solutions|"
@@ -618,7 +638,7 @@ DEALER_NAME_RE = re.compile(r"\b(?:subaru|toyota|honda|nissan|hyundai|mazda|chev
 
 # Scam-style or junk posts (home-based travel booking, "No Experience Needed", event recruiting ads)
 JUNK_COMPANIES = {"dreamscape", "premierdestinationgroup", "torentify"}
-JUNK_TITLE_RE = re.compile(r"no experience (?:needed|required|necessary)|help us grow our|join our (?:talent )?(?:network|community|pool)|"
+JUNK_TITLE_RE = re.compile(r"no experience (?:needed|required|necessary)|vacation booking|help us grow our|join our (?:talent )?(?:network|community|pool)|"
                            r"talent (?:network|pool|community)\b|management trainee|travel associate|let[\u2019']?s (?:connect|meet) at|meet us at|"
                            r"visit (?:us|our booth) at|career fair|job fair|hiring event|travel bookings?\b|"
                            r"data entry[^|]*(?:work from home|\bwfh\b)|build (?:a|your) schedule|schedule that works|"
@@ -759,7 +779,7 @@ MANAGER_SIGNAL_RE = re.compile(r"work from anywhere|anywhere in the world|worldw
 # Searches where any outsourceable role counts (only the hard no's apply)
 OPEN_CATEGORIES = {"General Remote", "Worldwide Hiring", "Tech Web & Mobile", "Tech QA & DevOps", "Tech AI & Data",
                    "E-commerce Support", "Video & Content", "No-Code & CRM Tech", "AI & Automation", "Remote Roles",
-                   "Design, Product & Delivery", "Small Business Marketing", "Sweden Tech",
+                   "Design, Product & Delivery", "Small Business Marketing", "Sweden Tech", "Remote Boards",
                    "Other Remote", "More Remote Roles"}        # old names kept so older runs still read the same
 
 # Tech roles: "Senior" / "Sr" / "Lead" / "Staff" / "Principal" allowed at 1-50 staff (Director, Head, VP stay blocked)
@@ -1081,7 +1101,7 @@ def best_category(title, category):
     if category in ("CRM Automation", "AI Automation"):
         return category
     if category == "Remote Boards":
-        return "CRM Automation"                  # remote boards only bring GHL / HubSpot / CRM jobs
+        return "CRM Automation" if CRM_BOARD_RE.search(title) else title_category(title)   # GHL / CRM, tech or automation
     if category in OPEN_CATEGORIES:
         for cat, rx in ROLE_FIT_RE.items():
             if rx.search(title):
@@ -1255,7 +1275,9 @@ CLEAR_REMOTE_RE = re.compile(
     r"\(\s*remote\s*\)|remote,? u\.s\.|\b(?:located|live|living|based|work) anywhere in\b|"
     r"\bopen to (?:fully )?remote (?:candidates|applicants|workers|hires|talent)\b|\bremote,? async\b|"
     r"\b(?:a|is|this) remote,? (?:\w+,? ){0,2}(?:role|position|job|opportunity)\b|"
-    r"\b(?:primarily|largely|mostly|predominantly) remote\b", re.I)
+    r"\b(?:primarily|largely|mostly|predominantly) remote\b|"
+    r"\bp\u00e5 distans\b|\bdistansarbete\b|\bfj\u00e4rrarbete\b|\b100 ?% (?:homeoffice|home office|remote|"
+    r"thuiswerken|hjemmearbejde)\b|\bvollst\u00e4ndig remote\b|\bvolledig remote\b|\bfull remote\b", re.I)
 # Office wording (always wins over remote wording unless the title or location says Remote)
 CLEAR_ONSITE_RE = re.compile(r"\(\s*on[- ]?site\b|\bon[- ]?site\s*(?:[\u2013\u2014|)]|- |, (?!training|visits?|support|"
                              r"meetings?|events?|teams?))|\bfull[- ]time,?\s*on[- ]?site\b|\bnot (?:a )?remote\b|"
@@ -1277,7 +1299,7 @@ CLEAR_HYBRID_RE = re.compile(r"(?<!not )\bhybrid\b|"
 
 
 # A direct statement that the job is on-site ("This is a full-time, on-site role located in Toronto")
-HARD_ONSITE_RE = re.compile(r"\b(?:skilled|experienced|an?) (?:and [\w-]+ )?on-?site (?:[A-Z]?[\w./+-]+ ){0,3}(?:engineer|developer|analyst|tester|"
+HARD_ONSITE_RE = re.compile(r"\bfield[- ]based\b|\b(?:skilled|experienced|an?) (?:and [\w-]+ )?on-?site (?:[A-Z]?[\w./+-]+ ){0,3}(?:engineer|developer|analyst|tester|"
                             r"specialist|consultant|administrator)\b|\b(?:this is|it is|is) an? (?:(?:full|part)[- ]time,? |permanent,? |contract,? )*(?:on[- ]?site|"
                             r"in[- ]office|in[- ]person|office[- ]based) (?:role|position|job|opportunity)\b|"
                             r"\b(?:this|the) (?:(?:full|part)[- ]time,? |permanent,? )*(?:on[- ]?site|in[- ]office|in[- ]person)"
@@ -1483,10 +1505,11 @@ def priority(title, desc, company, industry):
 
 
 def parse_size(raw):
-    nums = [int(n.replace(",", "")) for n in re.findall(r"[\d,]+", raw) if n.replace(",", "")]
+    nums = [int(n.replace(",", "").replace(".", "")) for n in re.findall(r"[\d,.]+", raw) if n.replace(",", "").replace(".", "")]
     if not nums:
         return "Unknown", None
-    label = re.sub(r"\s*employees?", "", raw.strip(), flags=re.I)
+    label = re.sub(r"\s*(?:employees?|anst\u00e4llda|Besch\u00e4ftigte|Mitarbeiter|medewerkers|werknemers|ansatte)", "", raw.strip(),
+                   flags=re.I)
     return label, nums[0]
 
 
@@ -1523,15 +1546,23 @@ def company_size(company_url, row):
         return SIZE_CACHE[url]
     result = ("Unknown", None, "", "")
     try:
-        r = requests.get(url + "/", headers=UA, timeout=20, allow_redirects=True)
+        # Country pages (se.linkedin.com, de.linkedin.com...) show local labels: ask for the English page first
+        fetch_url = re.sub(r"^https?://[a-z]{2}\.linkedin\.com", "https://www.linkedin.com", url)
+        r = requests.get(fetch_url + "/", headers={**UA, "Accept-Language": "en-US,en;q=0.9"}, timeout=20,
+                         allow_redirects=True)
         if r.status_code == 200 and "authwall" not in r.url:
-            plain = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", r.text))
-            m = re.search(r"Company size\s*([\d,]+\s*(?:-\s*[\d,]+)?\+?)\s*employees", plain, re.I)
-            ind = re.search(r"Industry\s+(.{3,60}?)\s+(?:Company size|Headquarters|Type|Founded)", plain)
+            plain = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", r.text)).replace("\u2013", "-")
+            m = re.search(r"(?:Company size|F\u00f6retagsstorlek|Unternehmensgr\u00f6\u00dfe|Bedrijfsgrootte|"
+                          r"Virksomhedsst\u00f8rrelse)\s*:?\s*([\d.,]+\s*(?:-\s*[\d.,]+)?\+?)\s*(?:employees|anst\u00e4llda|"
+                          r"Besch\u00e4ftigte|Mitarbeiter|medewerkers|werknemers|ansatte)", plain, re.I)
+            ind = re.search(r"(?:Industry|Bransch|Branche|Sector)\s+(.{3,60}?)\s+(?:Company size|Headquarters|Type|Founded|"
+                            r"F\u00f6retagsstorlek|Unternehmensgr|Bedrijfsgrootte|Virksomhedsst)", plain)
             label, mn = parse_size(m.group(1)) if m else ("Unknown", None)
             result = (label, mn, ind.group(1).strip() if ind else "", company_website(r.text))
             PEOPLE_CACHE[url] = company_people(r.text)
-            hq = re.search(r"Headquarters\s+(.{3,80}?)\s+(?:Type|Founded|Specialties|Company size|Locations)", plain)
+            hq = re.search(r"(?:Headquarters|Huvudkontor|Hauptsitz|Hoofdkantoor|Hovedkontor)\s+(.{3,80}?)\s+(?:Type|Founded|"
+                           r"Specialties|Company size|Locations|Typ|Grundat|Gegr\u00fcndet|Opgericht|Grundlagt|Specialiteter|"
+                           r"Spezialgebiete|Specialismen|Platser|Standorte|Locaties|Lokationer)", plain)
             COMPANY_HQ[url] = hq.group(1).strip() if hq else ""
             cnt = re.search(r"(?:See all|View all)\s+([\d,]+)\s+employees", plain, re.I) or \
                 re.search(r"([\d,]+)\s+employees on LinkedIn", plain, re.I)
@@ -1881,7 +1912,8 @@ def remote_boards():
         open_loc = (not loc) or bool(OPEN_LOCATION_RE.search(loc)) and not re.search(
             r"\b(?:us|usa|u\.s\.|united states|north america|americas|canada|europe|uk|latam)\b(?! ?\+)", loc, re.I) \
             or bool(re.search(r"worldwide|anywhere", loc, re.I))
-        crm_job = bool(CRM_BOARD_RE.search(r["title"] + " " + r["description"]))
+        crm_job = bool(CRM_BOARD_RE.search(r["title"] + " " + r["description"]) or TECH_TITLE_RE.search(r["title"])
+                       or re.search(r"automation|\bai\b|n8n|zapier", r["title"], re.I))
         if ok_time and open_loc and crm_job and r["title"] and r["company"]:
             if re.search(r"worldwide|anywhere|global|international|no restriction", loc, re.I):
                 r["description"] += " work from anywhere"            # counts as an 'open worldwide' signal
@@ -1978,7 +2010,8 @@ def main():
             sh_cat = cat_name == "SimplyHired GHL"
             if sh_cat:
                 terms = [("gohighlevel", 0)]
-            extra_locs = cfg.get("extra_locations", []) if region_name == "USA" else []
+            extra_locs = (cfg.get("extra_locations", []) if region_name == "USA" else []) + \
+                (EU_LOCATIONS if region_name == "Sweden" and cfg.get("eu_search") else [])
             for location, short in list(rcfg["locations"]) + list(extra_locs):
                 extra_loc = (location, short) in extra_locs     # e.g. LinkedIn's "Worldwide" location
                 passes = (True,) if cat_name == "Remote Boards" or extra_loc or sh_cat or cfg.get("remote_only") \
@@ -2047,7 +2080,9 @@ def main():
                             skip_note(row, title, desc, company, cat_name, "AI gig marketplace / contributor gig", remote_pass)
                             continue
                         if text(row.get("site")) not in ("linkedin", "") and not sh_cat and \
-                                not (CRM_TITLE_RE.search(title) or GHL_RE.search(title)):
+                                not (CRM_TITLE_RE.search(title) or GHL_RE.search(title)) and \
+                                not (text(row.get("site")) in BOARD_SITES and (TECH_TITLE_RE.search(title) or
+                                     re.search(r"automation|\bai\b|n8n|zapier", title, re.I))):
                             ex_role.add(key)
                             continue                                     # other sites: GHL / CRM titles only
                         if regexes and not any(r.search(title + " " + desc) for r in regexes):
@@ -2079,12 +2114,20 @@ def main():
                                     break
                         size_label, size_min, page_industry, website = company_size(company_url, row)
                         WEBSITE_OF[company] = website or text(row.get("company_url_direct"))
+                        lead_region = short
+                        if short == "EU":                        # "European Union" / "EMEA" search: label by head office
+                            lead_region = eu_label(COMPANY_HQ.get(company_url.split("?")[0].rstrip("/"), ""))
+                            if not lead_region:
+                                ex_loc.add(key)
+                                skip_note(row, title, desc, company, cat_name, "EU search: company not in a target country",
+                                          remote_pass, size_label)
+                                continue
                         if is_agency(company, industry, desc, title):
                             ex_agency.add(key)
                             continue                                     # website shows a staffing firm
                         if sh_cat and not COMPANY_HQ.get(company_url.split("?")[0].rstrip("/")):
                             company_url = linkedin_company_search(company)   # page not found: LinkedIn search link
-                        max_staff = REGION_MAX_EMPLOYEES.get(region_name, MAX_EMPLOYEES)
+                        max_staff = REGION_MAX_EMPLOYEES.get(lead_region, MAX_EMPLOYEES)
                         if size_min is not None and size_min > max_staff and not sh_cat:
                             ex_big.add(key)
                             skip_note(row, title, desc, company, cat_name, f"More than {max_staff} staff ({size_label})",
@@ -2093,12 +2136,13 @@ def main():
                         if text(row.get("site")) in BOARD_SITES and not us_company(company_url):
                             ex_loc.add(key)                              # remote boards: US companies only
                             continue
-                        if foreign_company(company_url, company, region_name, bool(WORLDWIDE_RE.search(desc))) and not sh_cat:
+                        if short != "EU" and foreign_company(company_url, company, region_name,
+                                                             bool(WORLDWIDE_RE.search(desc))) and not sh_cat:
                             ex_loc.add(key)                              # company based outside the US
                             skip_note(row, title, desc, company, cat_name, f"Company based outside {region_name}",
                                       remote_pass, size_label)
                             continue
-                        if extra_loc and not us_company(company_url):
+                        if extra_loc and short != "EU" and not us_company(company_url):
                             ex_loc.add(key)                              # "Worldwide" search: US head office only
                             skip_note(row, title, desc, company, cat_name, "Company not confirmed in the US",
                                       remote_pass, size_label)
@@ -2133,8 +2177,8 @@ def main():
                             "priority": p_label,
                             "priority_rank": p_rank,
                             "category": title_category(title) if (widened or sh_cat) else best_category(title, cat_name),
-                            "region": short,
-                            "region_rank": rcfg["rank"],
+                            "region": lead_region,
+                            "region_rank": REGIONS.get(lead_region, rcfg)["rank"],
                             "title": title,
                             "role": role,
                             "skills": " · ".join(skills),
