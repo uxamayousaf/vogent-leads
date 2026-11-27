@@ -78,6 +78,12 @@ ALL_REGIONS = CORE_REGIONS + NEW_REGIONS
 ENGLISH_REGIONS = CORE_REGIONS + ["Australia", "New Zealand", "Ireland", "Singapore"]
 SITES = ["linkedin"]
 GHL_SEARCH_TERMS = {"GoHighLevel", "Go High Level", "GHL", "HighLevel"}   # these also search Indeed (27 Nov)
+# From 27 Nov: titles GHL posts often use (the post names GoHighLevel only in its text)
+GHL_STYLE_TITLES = ["CRM Success Manager", "CRM Account Manager", "CRM Implementation Specialist", "CRM Support Specialist",
+                    "Marketing Automation Manager", "Funnel Specialist"]
+GHL_HOURS_OLD = 168      # GHL searches look back 7 days, so a post missed one day is caught later (already-seen and
+                         # already-contacted companies are still skipped)
+HIGHLEVEL_OWN_RE = re.compile(r"^\s*(?:go\s?)?high\s?level(?:,? inc\.?)?\s*$|^\s*lead\s?connector\b", re.I)
 INDEED_COUNTRY = {"United States": "USA", "Canada": "Canada", "United Kingdom": "UK", "Australia": "Australia",
                   "New Zealand": "New Zealand", "Ireland": "Ireland", "Singapore": "Singapore"}          # LinkedIn only (Indeed, ZipRecruiter and Google Jobs switched off)
 # From 27 Nov: the GoHighLevel searches also read these job sites, with the same strict checks as Indeed
@@ -101,7 +107,7 @@ CATEGORIES = {
             "HubSpot Specialist", "HubSpot Administrator", "CRM Automation Specialist",
             "CRM Administrator", "CRM Manager", "CRM Specialist",
             "Marketing Automation Specialist", "Funnel Builder", "HubSpot Admin",
-        ],
+        ] + GHL_STYLE_TITLES,                                     # added 27 Nov
         "must_mention": GHL_TERMS + ["hubspot", "zoho crm", "keap", "activecampaign", "pipedrive"],
     },
     "AI Automation": {
@@ -433,17 +439,25 @@ AGENCY_NAME_WORDS = [
     "headhunt", "executive search", "4rec", "recruitment",
 ]
 AGENCY_PHRASES = [
-    "our client", "on behalf of our client", "on behalf of a client", "our partner is a", "our partner is an",
+    "on behalf of a client", "our partner is a", "our partner is an",
     "onsite/offshore", "onsite / offshore", "c2c", "corp to corp", "corp-to-corp", "our talent partner",
     "recruitment revolution",
-    "for a client of ours", "client of ours", "my client", "on behalf of my client",
+    "for a client of ours", "client of ours",
 ]
+# From 27 Nov: "our client" / "my client" only count when someone is being placed with that client
+# ("our client is seeking", "on behalf of our client", "for our client,"). A company talking about
+# "our clients" or "our client base" (GHL agencies, SaaS) is a direct employer, not a recruiter.
+CLIENT_PLACEMENT_RE = re.compile(
+    r"\b(?:on behalf of|for) (?:our|my|a) client\b(?!s|'s? (?:base|accounts?)|\s+(?:base|accounts?|portfolio|success|list|"
+    r"roster|relationships?|services?|experience|work|needs|support|onboarding|communication|satisfaction))|"
+    r"\b(?:our|my) client(?:'s\b|\s*,|\s+(?:is|has|seeks|requires|wants|needs an?|located|based|in the|a leading|"
+    r"an? [\w-]+ (?:company|firm|agency|startup|business|brand|organization))\b|\s+\()", re.I)
 
 # Extra agency signals, used to keep the OUTREACH list strictly to direct employers
 STRICT_AGENCY_PHRASES = [
     "staffing agency", "staffing firm", "staffing company", "staffing partner", "recruitment agency",
     "recruiting agency", "recruiting firm", "recruitment firm", "talent agency", "placement agency",
-    "talent acquisition partner", "our client", "client is seeking", "client is looking", "for our client",
+    "talent acquisition partner", "client is seeking", "client is looking",
     "on behalf of", "contract-to-hire", "contract to hire", "outsourcing company", "bpo",
     "we connect talent", "we place candidates", "hiring on behalf", "virtual assistant agency",
     "remote staffing", "offshore staffing", "we are a staffing", "we are a recruiting",
@@ -1007,7 +1021,7 @@ def is_agency(company, industry, desc, title=""):
         return True                              # "provenio people": recruitment firms
     if any(w in c for w in AGENCY_NAME_WORDS):
         return True
-    return any(p in d for p in AGENCY_PHRASES)
+    return any(p in d for p in AGENCY_PHRASES) or bool(CLIENT_PLACEMENT_RE.search(desc))
 
 
 FOREIGN_WORDS_RE = re.compile(r"\b(?:je|jouw|wij|onze|het|een|voor|met|bij|naar|niet|ook|und|wir|sie|ihre|unser|mit|"
@@ -1042,7 +1056,7 @@ def needs_other_language(desc):
 def strict_agency(company, industry, desc):
     d, ind = desc.lower(), industry.lower()
     return (is_agency(company, industry, desc) or any(w in ind for w in STRICT_INDUSTRY_WORDS)
-            or any(p in d for p in STRICT_AGENCY_PHRASES))
+            or any(p in d for p in STRICT_AGENCY_PHRASES) or bool(CLIENT_PLACEMENT_RE.search(desc)))
 
 
 # Senior roles are skipped everywhere (small companies rarely outsource them)
@@ -1242,6 +1256,23 @@ def title_not_english(title):
         except Exception:
             return False
     return False
+
+
+# From 27 Nov, GHL posts only: "must live in / be authorized to work in the US" (or Canada, UK ...) is allowed.
+# Citizenship, W-2, clearance, licences, state and city locks still block.
+_RES_COUNTRY = (r"(?:the\s+)?(?:US|U\.S\.A?\.?|USA|United States(?: of America)?|America|Canada|UK|U\.K\.|United Kingdom|"
+                r"Australia|New Zealand|Ireland|Singapore)\b")
+COUNTRY_RESIDENCE_RE = re.compile(
+    r"\b(?:must|should|need to|needs to|required to|candidates? must)\s+(?:currently\s+)?(?:be\s+)?(?:reside|residing|live|living|"
+    r"located|based)(?:\s+and\s+(?:be\s+)?(?:legally\s+)?(?:authori[sz]ed|eligible)\s+to\s+work)?\s+(?:in|within)\s+" + _RES_COUNTRY +
+    r"|\b(?:legally\s+)?(?:authori[sz]ed|eligible)\s+to\s+work\s+in\s+" + _RES_COUNTRY +
+    r"|\b(?:US|U\.S\.|USA|Canada|UK|United States|United Kingdom)[\s-]*(?:based\s+)?(?:residents?|candidates?|applicants?|persons?)?"
+    r"[\s-]*(?:based\s+)?only\b|\(\s*(?:US|USA|U\.S\.|Canada|UK)\s*(?:only|based)\s*\)", re.I)
+
+
+def ghl_residence_ok(text_):
+    """GHL posts: the text with country-residence requirements taken out (everything else is still checked)."""
+    return COUNTRY_RESIDENCE_RE.sub(" ", text_)
 
 
 def location_locked(title, location, desc):
@@ -1668,6 +1699,7 @@ def search(term, n, location, remote=False, cat_name=""):
     """GHL / CRM: LinkedIn, Indeed, ZipRecruiter, Google Jobs, beBee and SimplyHired. Every other role: LinkedIn only.
     Each site on its own, so one failing site never stops the others."""
     frames = []
+    ghl_term = cat_name == "CRM Automation" and (term in GHL_SEARCH_TERMS or term in GHL_STYLE_TITLES)
     sites = ["linkedin"]
     if cat_name == "CRM Automation" and term in GHL_SEARCH_TERMS and location in INDEED_COUNTRY:
         # from 27 Nov: Indeed, Google Jobs, Glassdoor and ZipRecruiter too, for the GoHighLevel searches only
@@ -1675,7 +1707,7 @@ def search(term, n, location, remote=False, cat_name=""):
     for site in sites:
         try:
             kw = dict(site_name=[site], search_term=term, location=location, results_wanted=n,
-                      hours_old=HOURS_OLD, is_remote=remote)
+                      hours_old=GHL_HOURS_OLD if ghl_term else HOURS_OLD, is_remote=remote)
             if site == "linkedin":
                 kw["linkedin_fetch_description"] = True
             if site in ("indeed", "glassdoor", "zip_recruiter"):
@@ -1683,7 +1715,8 @@ def search(term, n, location, remote=False, cat_name=""):
             if site in ("glassdoor", "zip_recruiter", "google"):
                 kw["fetch_description"] = True
             if site == "google":
-                kw["google_search_term"] = f"{term} {'remote ' if remote else ''}jobs in {location} since yesterday"
+                kw["google_search_term"] = f"{term} {'remote ' if remote else ''}jobs in {location} " + \
+                    ("in the last week" if ghl_term else "since yesterday")
             df = scrape_jobs(**kw)
             if site == "linkedin" and (df is None or len(df) == 0):
                 time.sleep(random.uniform(60, 90))      # LinkedIn often answers 0 when it is busy: wait, try once more
@@ -2284,6 +2317,9 @@ def main():
                         key = re.sub(r"\W+", "", company.lower()) + "|" + re.sub(r"\W+", "", title.lower())
                         if key in found or key in ex_agency or key in ex_big or key in ex_lang or key in ex_loc:
                             continue
+                        if HIGHLEVEL_OWN_RE.search(company):
+                            ex_big.add(key)
+                            continue                                     # HighLevel's own job ads (far too big)
                         checked.add(key)
                         desc = text(row.get("description"))
                         industry = text(row.get("company_industry"))
@@ -2349,7 +2385,8 @@ def main():
                         if title_not_english(title) or not is_english(desc) or needs_other_language(desc):
                             ex_lang.add(key)
                             continue
-                        if location_locked(title, text(row.get("location")), desc) or HARD_LOCAL_RE.search(desc) \
+                        lock_title, lock_desc = (ghl_residence_ok(title), ghl_residence_ok(desc)) if ghl_any else (title, desc)
+                        if location_locked(lock_title, text(row.get("location")), lock_desc) or HARD_LOCAL_RE.search(lock_desc) \
                                 or CITY_LOCK_RE.search(title + " \n" + desc) or STATE_LOCK_RE.search(desc):
                             ex_loc.add(key)                              # must live in the US, W-2, licensed...
                             skip_note(row, title, desc, company, cat_name, "Must live in the US / W-2 / licensed",
